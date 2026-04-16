@@ -17,6 +17,9 @@ inputs:
   app_private_key:
     description: 'GitHub App private key (for posting as kai[bot])'
     required: false
+  anthropic_api_key:
+    description: 'Anthropic API key for Claude-powered analysis'
+    required: false
 
 runs:
   using: 'node20'
