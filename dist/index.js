@@ -27774,7 +27774,7 @@ _Delete this comment to cancel._`
       result = r.text;
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "\u2014 %";
-      footer = `**${selectedModel.label}** | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+      footer = `Kai (Kodif AI) | **${selectedModel.label}** | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
     }
     if (!await commentExists(octokit, owner, repo, replyCommentId)) {
       core.info("Cancelled");
@@ -27824,26 +27824,41 @@ Check runner logs or contact infra team.
     core.setFailed(msg);
   }
 }
+var MAX_RETRIES = 3;
+function backoffMs(attempt) {
+  return Math.min(1e3 * Math.pow(2, attempt), 4e3);
+}
 async function safeUpdate(o, owner, repo, id, body) {
-  try {
-    await o.issues.updateComment({ owner, repo, comment_id: id, body });
-  } catch {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      await o.issues.updateComment({ owner, repo, comment_id: id, body });
+      return;
+    } catch (err) {
+      const st = err?.status ?? 0;
+      if (st >= 500 && attempt < MAX_RETRIES - 1) {
+        core.warning(`safeUpdate: GitHub ${st}, retry ${attempt + 1}/${MAX_RETRIES}`);
+        await new Promise((r) => setTimeout(r, backoffMs(attempt)));
+        continue;
+      }
+      core.warning(`safeUpdate failed: ${st}`);
+      return;
+    }
   }
 }
 async function commentExists(o, owner, repo, id) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       await o.issues.getComment({ owner, repo, comment_id: id });
       return true;
     } catch (err) {
-      const status = err?.status ?? 0;
-      if (status === 404) return false;
-      if (status >= 500 && attempt < 2) {
-        core.warning(`commentExists: GitHub ${status}, retry ${attempt + 1}/3`);
-        await new Promise((r) => setTimeout(r, 2e3));
+      const st = err?.status ?? 0;
+      if (st === 404) return false;
+      if (st >= 500 && attempt < MAX_RETRIES - 1) {
+        core.warning(`commentExists: GitHub ${st}, retry ${attempt + 1}/${MAX_RETRIES} (backoff ${backoffMs(attempt)}ms)`);
+        await new Promise((r) => setTimeout(r, backoffMs(attempt)));
         continue;
       }
-      core.warning(`commentExists: unexpected error (${status}), assuming exists`);
+      core.warning(`commentExists: unexpected error (${st}), assuming exists`);
       return true;
     }
   }

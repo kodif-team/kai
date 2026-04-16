@@ -226,7 +226,7 @@ async function run() {
 
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "— %";
-      footer = `**${selectedModel.label}** | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+      footer = `Kai (Kodif AI) | **${selectedModel.label}** | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
     }
 
     if (!(await commentExists(octokit, owner, repo, replyCommentId))) {
@@ -264,26 +264,45 @@ async function run() {
   }
 }
 
+const MAX_RETRIES = 3;
+
+function backoffMs(attempt: number): number {
+  // Exponential backoff: 1s, 2s, 4s (capped)
+  return Math.min(1000 * Math.pow(2, attempt), 4000);
+}
+
 async function safeUpdate(o: Octokit, owner: string, repo: string, id: number, body: string) {
-  try { await o.issues.updateComment({ owner, repo, comment_id: id, body }); } catch { /* */ }
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      await o.issues.updateComment({ owner, repo, comment_id: id, body });
+      return;
+    } catch (err: unknown) {
+      const st = (err as any)?.status ?? 0;
+      if (st >= 500 && attempt < MAX_RETRIES - 1) {
+        core.warning(`safeUpdate: GitHub ${st}, retry ${attempt + 1}/${MAX_RETRIES}`);
+        await new Promise(r => setTimeout(r, backoffMs(attempt)));
+        continue;
+      }
+      core.warning(`safeUpdate failed: ${st}`);
+      return;
+    }
+  }
 }
 
 async function commentExists(o: Octokit, owner: string, repo: string, id: number): Promise<boolean> {
-  // Retry on 5xx — don't treat transient GitHub errors as "comment deleted"
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       await o.issues.getComment({ owner, repo, comment_id: id });
       return true;
     } catch (err: unknown) {
-      const status = (err as any)?.status ?? 0;
-      if (status === 404) return false; // actually deleted
-      if (status >= 500 && attempt < 2) {
-        core.warning(`commentExists: GitHub ${status}, retry ${attempt + 1}/3`);
-        await new Promise(r => setTimeout(r, 2000));
+      const st = (err as any)?.status ?? 0;
+      if (st === 404) return false; // actually deleted
+      if (st >= 500 && attempt < MAX_RETRIES - 1) {
+        core.warning(`commentExists: GitHub ${st}, retry ${attempt + 1}/${MAX_RETRIES} (backoff ${backoffMs(attempt)}ms)`);
+        await new Promise(r => setTimeout(r, backoffMs(attempt)));
         continue;
       }
-      // Unknown error — assume exists (don't cancel work due to flaky API)
-      core.warning(`commentExists: unexpected error (${status}), assuming exists`);
+      core.warning(`commentExists: unexpected error (${st}), assuming exists`);
       return true;
     }
   }
