@@ -2,7 +2,6 @@
   "name": "kai-action",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs",
     "typecheck": "tsc --noEmit"

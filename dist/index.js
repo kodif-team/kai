@@ -24124,8 +24124,8 @@ var require_fast_content_type_parse2 = __commonJS({
 });
 
 // src/index.ts
-var core = __toESM(require_core(), 1);
-var github = __toESM(require_github(), 1);
+var core = __toESM(require_core());
+var github = __toESM(require_github());
 
 // node_modules/universal-user-agent/index.js
 function getUserAgent() {
