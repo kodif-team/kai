@@ -1,14 +1,11 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
-import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import Anthropic from "@anthropic-ai/sdk";
 
 async function run() {
   try {
     const trigger = core.getInput("trigger_phrase") || "@kai";
-    const appId = core.getInput("app_id");
-    const appPrivateKey = core.getInput("app_private_key");
     const githubToken = core.getInput("github_token");
     const anthropicApiKey = core.getInput("anthropic_api_key");
 
@@ -44,18 +41,7 @@ async function run() {
 
     core.info(`Triggered by @${sender} in #${issueNumber}`);
 
-    // Auth
-    let octokit: Octokit;
-    if (appId && appPrivateKey) {
-      const installationId = await getInstallationId(appId, appPrivateKey, context.repo.owner);
-      octokit = new Octokit({
-        authStrategy: createAppAuth,
-        auth: { appId, privateKey: appPrivateKey, installationId },
-      });
-    } else {
-      octokit = new Octokit({ auth: githubToken });
-    }
-
+    const octokit = new Octokit({ auth: githubToken });
     const { owner, repo } = context.repo;
 
     // 1. Eyes reaction
@@ -63,7 +49,10 @@ async function run() {
       await octokit.reactions.createForIssueComment({
         owner, repo, comment_id: commentId, content: "eyes",
       });
-    } catch { /* graceful */ }
+      core.info("Added 👀 reaction");
+    } catch {
+      core.warning("Could not add reaction (missing permission?)");
+    }
 
     // 2. Extract user message
     const idx = commentBody.toLowerCase().indexOf(trigger.toLowerCase());
@@ -74,6 +63,7 @@ async function run() {
       owner, repo, issue_number: issueNumber,
       body: `> @${sender} — got it\n\n⏳ Working on it...\n\n_Delete this comment to cancel._`,
     });
+    core.info(`Created working comment #${reply.id}`);
 
     // 4. Get PR context
     let prDiff = "";
@@ -82,7 +72,7 @@ async function run() {
     let filesList = "";
 
     try {
-      await updateComment(octokit, owner, repo, reply.id,
+      await safeUpdate(octokit, owner, repo, reply.id,
         `> @${sender} — got it\n\n📖 Reading PR context...\n\n_Delete this comment to cancel._`);
 
       const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: issueNumber });
@@ -94,7 +84,6 @@ async function run() {
       });
       filesList = files.map(f => `- ${f.filename} (+${f.additions}/-${f.deletions}) [${f.status}]`).join("\n");
 
-      // Get diff
       const diffResponse = await octokit.pulls.get({
         owner, repo, pull_number: issueNumber,
         mediaType: { format: "diff" },
@@ -107,32 +96,31 @@ async function run() {
       core.warning(`Could not fetch PR context: ${e instanceof Error ? e.message : e}`);
     }
 
-    // 5. Call Claude API (or placeholder)
+    // 5. Call Claude or show PR info
     let result: string;
 
     if (anthropicApiKey) {
       try {
-        await updateComment(octokit, owner, repo, reply.id,
+        await safeUpdate(octokit, owner, repo, reply.id,
           `> @${sender} — got it\n\n📖 Reading PR context...\n🔍 Analyzing with Claude...\n\n_Delete this comment to cancel._`);
 
         result = await callClaude(anthropicApiKey, userMessage, prTitle, prBody, filesList, prDiff);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         core.error(`Claude API error: ${msg}`);
-        result = `⚠️ Claude API error: ${msg}\n\nPR context was loaded successfully. Add \`ANTHROPIC_API_KEY\` to repo secrets if not set.`;
+        result = `⚠️ Claude API error: \`${msg}\`\n\nPR context loaded. Check \`ANTHROPIC_API_KEY\` secret and API balance.`;
       }
     } else {
-      result = `📋 **PR: ${prTitle}**\n\nFiles changed:\n${filesList}\n\n_To enable AI analysis, add \`ANTHROPIC_API_KEY\` to repo secrets._`;
+      result = `📋 **PR: ${prTitle}**\n\nFiles changed:\n${filesList}\n\n_Add \`ANTHROPIC_API_KEY\` to repo secrets for AI analysis._`;
     }
 
-    // 6. Post final result
-    const alive = await commentExists(octokit, owner, repo, reply.id);
-    if (!alive) {
+    // 6. Post final result (check if comment still exists)
+    if (!(await commentExists(octokit, owner, repo, reply.id))) {
       core.info("Working comment deleted — cancelled");
       return;
     }
 
-    await updateComment(octokit, owner, repo, reply.id,
+    await safeUpdate(octokit, owner, repo, reply.id,
       `> @${sender}: ${userMessage}\n\n${result}\n\n---\n_Kai (Kodif AI)_`);
 
     core.info("Done");
@@ -142,16 +130,15 @@ async function run() {
 }
 
 async function callClaude(
-  apiKey: string,
-  userMessage: string,
-  prTitle: string,
-  prBody: string,
-  filesList: string,
-  diff: string,
+  apiKey: string, userMessage: string,
+  prTitle: string, prBody: string, filesList: string, diff: string,
 ): Promise<string> {
   const client = new Anthropic({ apiKey });
 
-  const systemPrompt = `You are Kai — the Kodif AI engineering agent.
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 4096,
+    system: `You are Kai — the Kodif AI engineering agent.
 You are reviewing PR: "${prTitle}"
 
 PR description:
@@ -168,45 +155,23 @@ ${diff}
 Instructions:
 - Answer the user's question about this PR
 - If asked to review, check for: bugs, security issues, performance, code quality
-- Be concise and actionable
-- Use markdown formatting
-- Reference specific files and line numbers`;
-
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
-    system: systemPrompt,
+- Be concise and actionable — use markdown
+- Reference specific files and line numbers`,
     messages: [{ role: "user", content: userMessage }],
   });
 
   return response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
+    .map(b => b.text)
     .join("\n");
 }
 
-async function updateComment(octokit: Octokit, owner: string, repo: string, id: number, body: string) {
-  try {
-    await octokit.issues.updateComment({ owner, repo, comment_id: id, body });
-  } catch { /* graceful */ }
+async function safeUpdate(octokit: Octokit, owner: string, repo: string, id: number, body: string) {
+  try { await octokit.issues.updateComment({ owner, repo, comment_id: id, body }); } catch { /* */ }
 }
 
 async function commentExists(octokit: Octokit, owner: string, repo: string, id: number): Promise<boolean> {
-  try {
-    await octokit.issues.getComment({ owner, repo, comment_id: id });
-    return true;
-  } catch { return false; }
-}
-
-async function getInstallationId(appId: string, privateKey: string, owner: string): Promise<number> {
-  const appOctokit = new Octokit({
-    authStrategy: createAppAuth,
-    auth: { appId, privateKey },
-  });
-  const { data } = await appOctokit.apps.listInstallations();
-  const inst = data.find(i => i.account?.login?.toLowerCase() === owner.toLowerCase());
-  if (!inst) throw new Error(`kai-kodif app not installed on ${owner}`);
-  return inst.id;
+  try { await octokit.issues.getComment({ owner, repo, comment_id: id }); return true; } catch { return false; }
 }
 
 run();
