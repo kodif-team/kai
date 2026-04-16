@@ -214,7 +214,8 @@ function buildCLIPrompt(
       `IGNORE: .github/, .claude/, CLAUDE.md, *.yml workflow files — these are bot infrastructure, not project code.`,
       `Task: ${userMessage}`,
       `IMPORTANT: Answer EXACTLY what the user asked. Do NOT default to security review unless explicitly asked.`,
-      `Rules: concise, markdown, reference files as repos/<service>/path/file.py:line (e.g. repos/ai_test/user_service.py:14), max 50 lines. Don't repeat prior analysis.`,
+      `Rules: concise, markdown, repos/<service>/path/file.py:line refs, max 50 lines. Don't repeat prior analysis.`,
+      `Git commits: NEVER add Co-Authored-By headers. Author is already set to kodif-ai[bot].`,
     );
   }
   return parts.filter(Boolean).join("\n");
