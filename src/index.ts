@@ -210,7 +210,7 @@ function buildFooter(
   const outK = Math.round(outputTokens / 1000);
   const cachePct = inputTokens > 0 ? Math.round((cacheReadTokens / inputTokens) * 100) : 0;
   const cacheTag = cachePct > 0 ? ` · cache ${cachePct}%` : "";
-  return `Kai · ${modelLabel} · [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings}${cacheTag} · ${inK}K in / ${outK}K out · $${costUsd.toFixed(2)} · ${numTurns}t · ${durationSec}s · deeper analysis: use sonnet / use opus`;
+  return `Kai · ${modelLabel} · [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings}${cacheTag} · ${inK}K in / ${outK}K out · $${costUsd.toFixed(4)} · ${numTurns}t · ${durationSec}s · deeper analysis: use sonnet / use opus`;
 }
 
 function shellQuote(value: string): string {

@@ -27769,7 +27769,7 @@ function buildFooter(modelLabel, rtkSavings, inputTokens, outputTokens, costUsd,
   const outK = Math.round(outputTokens / 1e3);
   const cachePct = inputTokens > 0 ? Math.round(cacheReadTokens / inputTokens * 100) : 0;
   const cacheTag = cachePct > 0 ? ` \xB7 cache ${cachePct}%` : "";
-  return `Kai \xB7 ${modelLabel} \xB7 [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings}${cacheTag} \xB7 ${inK}K in / ${outK}K out \xB7 $${costUsd.toFixed(2)} \xB7 ${numTurns}t \xB7 ${durationSec}s \xB7 deeper analysis: use sonnet / use opus`;
+  return `Kai \xB7 ${modelLabel} \xB7 [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings}${cacheTag} \xB7 ${inK}K in / ${outK}K out \xB7 $${costUsd.toFixed(4)} \xB7 ${numTurns}t \xB7 ${durationSec}s \xB7 deeper analysis: use sonnet / use opus`;
 }
 function shellQuote(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
