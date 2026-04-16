@@ -27973,6 +27973,9 @@ function buildFooter(modelLabel, rtkSavings, inputTokens, outputTokens, costUsd,
   const cacheTag = cachePct > 0 ? ` \xB7 cache ${cachePct}%` : "";
   return `Kai \xB7 ${modelLabel} \xB7 [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings}${cacheTag} \xB7 ${inK}K in / ${outK}K out \xB7 $${costUsd.toFixed(4)} \xB7 ${numTurns}t \xB7 ${durationSec}s \xB7 deeper analysis: use sonnet / use opus`;
 }
+function buildRouterFooter(routerModel, durationSec) {
+  return `Kai \xB7 ${routerModel} \xB7 RTK 0% \xB7 cache 0% \xB7 0K in / 0K out \xB7 $0.0000 \xB7 0t \xB7 ${durationSec}s \xB7 deeper analysis: unavailable`;
+}
 function shellQuote(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -28282,7 +28285,7 @@ async function run() {
         sender,
         repo: `${owner}/${repo}`,
         prNumber: issueNumber,
-        model: "none",
+        model: routerModel,
         message: rawMessage,
         durationMs: Date.now() - startTime,
         costUsd: 0,
@@ -28290,7 +28293,7 @@ async function run() {
         tokensOut: 0,
         status: "cancelled"
       });
-      core.info("Stop command handled without model call");
+      core.info(`Stop handled by local router (${routerModel})`);
       return;
     }
     try {
@@ -28315,6 +28318,8 @@ async function run() {
     });
     sessionUpdate(auditDb, runId, "queued");
     if (route.decision === "ask-clarification") {
+      const durationSec = Math.round((Date.now() - startTime) / 1e3);
+      const footer2 = buildRouterFooter(routerModel, durationSec);
       const { data: clarificationReply } = await octokit.issues.createComment({
         owner,
         repo,
@@ -28324,14 +28329,14 @@ async function run() {
 I need a specific target and expected outcome before spending model tokens. Please include the file, failure, PR, or change you want.
 
 ---
-<sub>Kai \xB7 router \xB7 0K in / 0K out \xB7 $0.0000</sub>`
+<sub>${footer2}</sub>`
       });
       sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: clarificationReply.id });
       auditLog(auditDb, {
         sender,
         repo: `${owner}/${repo}`,
         prNumber: issueNumber,
-        model: "router",
+        model: routerModel,
         message: rawMessage,
         durationMs: Date.now() - startTime,
         costUsd: 0,
@@ -28343,7 +28348,7 @@ I need a specific target and expected outcome before spending model tokens. Plea
     }
     if (route.decision === "reply-template") {
       const durationSec = Math.round((Date.now() - startTime) / 1e3);
-      const footer2 = buildFooter(selectedModel.label, "0.0%", 0, 0, 0, 0, durationSec);
+      const footer2 = buildRouterFooter(routerModel, durationSec);
       const template = templateForRoute(route);
       const { data: metaReply } = await octokit.issues.createComment({
         owner,
@@ -28357,8 +28362,8 @@ ${template}
 <sub>${footer2}</sub>`
       });
       sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: metaReply.id });
-      auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: selectedModel.label, message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, tokensIn: 0, tokensOut: 0, rtkSavings: "0.0%", status: "completed" });
-      core.info("Meta question \u2014 template reply");
+      auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: routerModel, message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, tokensIn: 0, tokensOut: 0, rtkSavings: "0.0%", status: "completed" });
+      core.info(`Template reply by local router (${routerModel})`);
       return;
     }
     requireClaudeCLI();

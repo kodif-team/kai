@@ -244,6 +244,12 @@ function buildFooter(
   return `Kai · ${modelLabel} · [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings}${cacheTag} · ${inK}K in / ${outK}K out · $${costUsd.toFixed(4)} · ${numTurns}t · ${durationSec}s · deeper analysis: use sonnet / use opus`;
 }
 
+// For answers served entirely by the local router (template reply / needs-input),
+// show the router model and zero out all paid-model metrics.
+function buildRouterFooter(routerModel: string, durationSec: number): string {
+  return `Kai · ${routerModel} · RTK 0% · cache 0% · 0K in / 0K out · $0.0000 · 0t · ${durationSec}s · deeper analysis: unavailable`;
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -598,10 +604,10 @@ async function run() {
       } catch { /* */ }
       auditLog(auditDb, {
         sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
-        model: "none", message: rawMessage, durationMs: Date.now() - startTime,
+        model: routerModel, message: rawMessage, durationMs: Date.now() - startTime,
         costUsd: 0, tokensIn: 0, tokensOut: 0, status: "cancelled",
       });
-      core.info("Stop command handled without model call");
+      core.info(`Stop handled by local router (${routerModel})`);
       return;
     }
 
@@ -620,31 +626,33 @@ async function run() {
     sessionUpdate(auditDb, runId, "queued");
 
     if (route.decision === "ask-clarification") {
+      const durationSec = Math.round((Date.now() - startTime) / 1000);
+      const footer = buildRouterFooter(routerModel, durationSec);
       const { data: clarificationReply } = await octokit.issues.createComment({
         owner, repo, issue_number: issueNumber,
-        body: `> @${sender}: ${rawMessage || "(empty)"}\n\nI need a specific target and expected outcome before spending model tokens. Please include the file, failure, PR, or change you want.\n\n---\n<sub>Kai · router · 0K in / 0K out · $0.0000</sub>`,
+        body: `> @${sender}: ${rawMessage || "(empty)"}\n\nI need a specific target and expected outcome before spending model tokens. Please include the file, failure, PR, or change you want.\n\n---\n<sub>${footer}</sub>`,
       });
       sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: clarificationReply.id });
       auditLog(auditDb, {
         sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
-        model: "router", message: rawMessage, durationMs: Date.now() - startTime,
+        model: routerModel, message: rawMessage, durationMs: Date.now() - startTime,
         costUsd: 0, tokensIn: 0, tokensOut: 0, status: "needs-input",
       });
       return;
     }
 
-    // Meta question — instant reply, no CLI needed
+    // Template reply served entirely by the local router — no paid model call.
     if (route.decision === "reply-template") {
       const durationSec = Math.round((Date.now() - startTime) / 1000);
-      const footer = buildFooter(selectedModel.label, "0.0%", 0, 0, 0, 0, durationSec);
+      const footer = buildRouterFooter(routerModel, durationSec);
       const template = templateForRoute(route);
       const { data: metaReply } = await octokit.issues.createComment({
         owner, repo, issue_number: issueNumber,
         body: `> @${sender}: ${rawMessage}\n\n${template}\n\n---\n<sub>${footer}</sub>`,
       });
       sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: metaReply.id });
-      auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: selectedModel.label, message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, tokensIn: 0, tokensOut: 0, rtkSavings: "0.0%", status: "completed" });
-      core.info("Meta question — template reply");
+      auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: routerModel, message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, tokensIn: 0, tokensOut: 0, rtkSavings: "0.0%", status: "completed" });
+      core.info(`Template reply by local router (${routerModel})`);
       return;
     }
 
