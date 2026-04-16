@@ -217,16 +217,20 @@ function progressBar(elapsed: number, maxSec: number): string {
   return "▓".repeat(filled) + "░".repeat(20 - filled);
 }
 
+const LOADING_GIF = "https://emojis.slackmojis.com/emojis/images/1643514453/4358/loading.gif?1643514453";
+
 function spinnerFrame(tick: number, elapsed: number, modelLabel: string): string {
   const s = SPINNER[tick % SPINNER.length];
   const phase = PHASES[Math.min(Math.floor(elapsed / 10), PHASES.length - 1)];
   const bar = progressBar(elapsed, CLI_TIMEOUT_MS / 1000);
+  const pct = Math.round((elapsed / (CLI_TIMEOUT_MS / 1000)) * 100);
   const min = Math.floor(elapsed / 60);
   const sec = elapsed % 60;
   const time = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
   return [
-    `${s} **${phase}...** (${time})`,
-    `\`${bar}\` ${Math.round((elapsed / (CLI_TIMEOUT_MS / 1000)) * 100)}%`,
+    `<img src="${LOADING_GIF}" width="18" height="18" align="absmiddle"> ${s} **${phase}...** (${time})`,
+    ``,
+    `\`${bar}\` ${pct}%`,
     ``,
     `Model: **${modelLabel}** | Mode: CLI + RTK`,
     ``,
