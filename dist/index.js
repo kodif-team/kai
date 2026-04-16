@@ -27580,6 +27580,78 @@ var Octokit2 = Octokit.plugin(requestLog, legacyRestEndpointMethods, paginateRes
 
 // src/index.ts
 var import_node_child_process = require("node:child_process");
+var import_node_sqlite = require("node:sqlite");
+var import_node_fs = require("node:fs");
+var AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/audit.db";
+function initAuditDb() {
+  try {
+    (0, import_node_fs.mkdirSync)("/home/kai/data", { recursive: true });
+  } catch {
+  }
+  const db = new import_node_sqlite.DatabaseSync(AUDIT_DB_PATH);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+      sender TEXT NOT NULL,
+      repo TEXT NOT NULL,
+      pr_number INTEGER NOT NULL,
+      model TEXT NOT NULL,
+      message TEXT,
+      duration_ms INTEGER,
+      cost_usd REAL,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      rtk_savings TEXT,
+      status TEXT DEFAULT 'started',
+      error TEXT
+    )
+  `);
+  return db;
+}
+function auditLog(db, data) {
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (sender, repo, pr_number, model, message, duration_ms, cost_usd, tokens_in, tokens_out, rtk_savings, status, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.sender,
+      data.repo,
+      data.prNumber,
+      data.model,
+      data.message ?? null,
+      data.durationMs ?? null,
+      data.costUsd ?? null,
+      data.tokensIn ?? null,
+      data.tokensOut ?? null,
+      data.rtkSavings ?? null,
+      data.status ?? "started",
+      data.error ?? null
+    );
+  } catch (e) {
+    core.warning(`Audit log failed: ${e}`);
+  }
+}
+async function getPRCommentsContext(octokit, owner, repo, issueNumber) {
+  try {
+    const { data: comments } = await octokit.issues.listComments({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      per_page: 50
+    });
+    const recent = comments.slice(-20);
+    return recent.map((c) => {
+      const who = c.user?.login ?? "unknown";
+      const isBot = who.includes("[bot]");
+      const prefix = isBot ? "[kai-response]" : `[@${who}]`;
+      const body = (c.body ?? "").slice(0, 500);
+      return `${prefix}: ${body}`;
+    }).join("\n\n---\n\n");
+  } catch {
+    return "(could not load PR comments)";
+  }
+}
 var MODELS = {
   haiku: { id: "claude-haiku-4-5-20251001", label: "Haiku" },
   sonnet: { id: "claude-sonnet-4-20250514", label: "Sonnet" },
@@ -27617,7 +27689,7 @@ function requireRTK() {
     throw new Error(`RTK is required but not available: ${msg}`);
   }
 }
-async function callClaudeCLI(apiKey, modelId, userMessage, prTitle, prBody, filesList) {
+async function callClaudeCLI(apiKey, modelId, userMessage, prTitle, prBody, filesList, prCommentsContext) {
   const prompt = [
     `You are Kai \u2014 the Kodif AI engineering agent.`,
     `PR: "${prTitle}"`,
@@ -27625,13 +27697,19 @@ async function callClaudeCLI(apiKey, modelId, userMessage, prTitle, prBody, file
     `
 Changed files:
 ${filesList}`,
+    prCommentsContext ? `
+--- Previous PR conversation (for context) ---
+${prCommentsContext}
+--- End of conversation ---` : "",
     `
 The repo is checked out. Use Bash and Read tools to inspect the code.`,
     `Run: git diff origin/main...HEAD to see changes.`,
     `Run: git log --oneline -5 for recent commits.`,
     `Then: ${userMessage}`,
     `
-Be concise and actionable. Use markdown. Reference files and line numbers.`
+Be concise and actionable. Use markdown. Reference files and line numbers.`,
+    `
+Do NOT repeat analysis already given in previous Kai comments above \u2014 focus on the new request.`
   ].filter(Boolean).join("\n");
   const isRoot = process.getuid?.() === 0;
   const claudeArgs = `-p --dangerously-skip-permissions --output-format json --max-turns 15 --model ${modelId}`;
@@ -27702,6 +27780,16 @@ async function run() {
     const rtkVersion = requireRTK();
     const modeLabel = "CLI + RTK";
     core.info(`Mode: ${modeLabel} | Model: ${selectedModel.label} | RTK: ${rtkVersion}`);
+    const auditDb = initAuditDb();
+    const startTime = Date.now();
+    auditLog(auditDb, {
+      sender,
+      repo: `${owner}/${repo}`,
+      prNumber: issueNumber,
+      model: selectedModel.label,
+      message: rawMessage,
+      status: "started"
+    });
     const { data: reply } = await octokit.issues.createComment({
       owner,
       repo,
@@ -27713,7 +27801,7 @@ async function run() {
 _Delete this comment to cancel._`
     });
     replyCommentId = reply.id;
-    let prDiff = "", prTitle = "", prBody = "", filesList = "";
+    let prTitle = "", prBody = "", filesList = "", prCommentsContext = "";
     try {
       await safeUpdate(
         octokit,
@@ -27722,7 +27810,8 @@ _Delete this comment to cancel._`
         replyCommentId,
         `> @${sender} \u2014 got it
 
-\u{1F4D6} Reading PR... _(${selectedModel.label}, ${modeLabel})_
+\u{1F4D6} Reading PR...
+\u{1F4AC} Loading conversation context... _(${selectedModel.label}, ${modeLabel})_
 
 _Delete this comment to cancel._`
       );
@@ -27741,10 +27830,7 @@ _Delete this comment to cancel._`
       }
       const { data: files } = await octokit.pulls.listFiles({ owner, repo, pull_number: issueNumber, per_page: 100 });
       filesList = files.map((f) => `- ${f.filename} (+${f.additions}/-${f.deletions}) [${f.status}]`).join("\n");
-      const maxDiff = modelTier === "haiku" ? 3e4 : modelTier === "sonnet" ? 6e4 : 1e5;
-      const diffResp = await octokit.pulls.get({ owner, repo, pull_number: issueNumber, mediaType: { format: "diff" } });
-      prDiff = String(diffResp.data);
-      if (prDiff.length > maxDiff) prDiff = prDiff.slice(0, maxDiff) + "\n\n... (truncated)";
+      prCommentsContext = await getPRCommentsContext(octokit, owner, repo, issueNumber);
     } catch (e) {
       core.warning(`PR context error: ${e instanceof Error ? e.message : e}`);
     }
@@ -27765,16 +27851,31 @@ ${filesList}`;
         `> @${sender} \u2014 got it
 
 \u{1F4D6} Reading PR...
+\u{1F4AC} Loaded conversation context
 \u{1F50D} Analyzing with **${selectedModel.label}**...
 \u2699\uFE0F ${modeLabel}
 
 _Delete this comment to cancel._`
       );
-      const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList);
+      const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prCommentsContext);
       result = r.text;
+      const durationMs = Date.now() - startTime;
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "\u2014 %";
-      footer = `Kai (Kodif AI) | **${selectedModel.label}** | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+      footer = `Kai (Kodif AI) | **${selectedModel.label}** | [RTK](https://github.com/rtk-ai/rtk) saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+      auditLog(auditDb, {
+        sender,
+        repo: `${owner}/${repo}`,
+        prNumber: issueNumber,
+        model: selectedModel.label,
+        message: rawMessage,
+        durationMs,
+        costUsd: r.costUsd,
+        tokensIn: r.inputTokens,
+        tokensOut: r.outputTokens,
+        rtkSavings: rtkPct,
+        status: "completed"
+      });
     }
     if (!await commentExists(octokit, owner, repo, replyCommentId)) {
       core.info("Cancelled");
@@ -27796,6 +27897,19 @@ ${result}
   } catch (error2) {
     const msg = error2 instanceof Error ? error2.message : String(error2);
     core.error(msg);
+    try {
+      const db = initAuditDb();
+      auditLog(db, {
+        sender: sender || "unknown",
+        repo: owner && repo ? `${owner}/${repo}` : "unknown",
+        prNumber: 0,
+        model: "unknown",
+        message: rawMessage,
+        status: "error",
+        error: msg.slice(0, 500)
+      });
+    } catch {
+    }
     if (octokit && owner && repo) {
       const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}
 

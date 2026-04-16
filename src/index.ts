@@ -2,6 +2,83 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { Octokit } from "@octokit/rest";
 import { execSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync } from "node:fs";
+
+// --- Audit DB (SQLite, persistent via Docker volume) ---
+
+const AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/audit.db";
+
+function initAuditDb(): DatabaseSync {
+  try { mkdirSync("/home/kai/data", { recursive: true }); } catch { /* */ }
+  const db = new DatabaseSync(AUDIT_DB_PATH);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+      sender TEXT NOT NULL,
+      repo TEXT NOT NULL,
+      pr_number INTEGER NOT NULL,
+      model TEXT NOT NULL,
+      message TEXT,
+      duration_ms INTEGER,
+      cost_usd REAL,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      rtk_savings TEXT,
+      status TEXT DEFAULT 'started',
+      error TEXT
+    )
+  `);
+  return db;
+}
+
+function auditLog(db: DatabaseSync, data: {
+  sender: string; repo: string; prNumber: number; model: string;
+  message?: string; durationMs?: number; costUsd?: number;
+  tokensIn?: number; tokensOut?: number; rtkSavings?: string;
+  status?: string; error?: string;
+}) {
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (sender, repo, pr_number, model, message, duration_ms, cost_usd, tokens_in, tokens_out, rtk_savings, status, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.sender, data.repo, data.prNumber, data.model,
+      data.message ?? null, data.durationMs ?? null, data.costUsd ?? null,
+      data.tokensIn ?? null, data.tokensOut ?? null, data.rtkSavings ?? null,
+      data.status ?? "started", data.error ?? null,
+    );
+  } catch (e) {
+    core.warning(`Audit log failed: ${e}`);
+  }
+}
+
+// --- PR Comments Context ---
+
+async function getPRCommentsContext(
+  octokit: Octokit, owner: string, repo: string, issueNumber: number,
+): Promise<string> {
+  try {
+    const { data: comments } = await octokit.issues.listComments({
+      owner, repo, issue_number: issueNumber, per_page: 50,
+    });
+    // Format last 20 comments for context
+    const recent = comments.slice(-20);
+    return recent.map(c => {
+      const who = c.user?.login ?? "unknown";
+      const isBot = who.includes("[bot]");
+      const prefix = isBot ? "[kai-response]" : `[@${who}]`;
+      // Truncate long comments
+      const body = (c.body ?? "").slice(0, 500);
+      return `${prefix}: ${body}`;
+    }).join("\n\n---\n\n");
+  } catch {
+    return "(could not load PR comments)";
+  }
+}
+
+// --- Models ---
 
 const MODELS: Record<string, { id: string; label: string }> = {
   haiku:  { id: "claude-haiku-4-5-20251001",  label: "Haiku" },
@@ -59,18 +136,20 @@ interface CLIResult {
 
 async function callClaudeCLI(
   apiKey: string, modelId: string, userMessage: string,
-  prTitle: string, prBody: string, filesList: string,
+  prTitle: string, prBody: string, filesList: string, prCommentsContext: string,
 ): Promise<CLIResult> {
   const prompt = [
     `You are Kai — the Kodif AI engineering agent.`,
     `PR: "${prTitle}"`,
     prBody ? `Description: ${prBody}` : "",
     `\nChanged files:\n${filesList}`,
+    prCommentsContext ? `\n--- Previous PR conversation (for context) ---\n${prCommentsContext}\n--- End of conversation ---` : "",
     `\nThe repo is checked out. Use Bash and Read tools to inspect the code.`,
     `Run: git diff origin/main...HEAD to see changes.`,
     `Run: git log --oneline -5 for recent commits.`,
     `Then: ${userMessage}`,
     `\nBe concise and actionable. Use markdown. Reference files and line numbers.`,
+    `\nDo NOT repeat analysis already given in previous Kai comments above — focus on the new request.`,
   ].filter(Boolean).join("\n");
 
   const isRoot = process.getuid?.() === 0;
@@ -170,6 +249,14 @@ async function run() {
     const modeLabel = "CLI + RTK";
     core.info(`Mode: ${modeLabel} | Model: ${selectedModel.label} | RTK: ${rtkVersion}`);
 
+    // Audit: init DB and log start
+    const auditDb = initAuditDb();
+    const startTime = Date.now();
+    auditLog(auditDb, {
+      sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
+      model: selectedModel.label, message: rawMessage, status: "started",
+    });
+
     // Create working comment (used by global error handler too)
     const { data: reply } = await octokit.issues.createComment({
       owner, repo, issue_number: issueNumber,
@@ -177,12 +264,12 @@ async function run() {
     });
     replyCommentId = reply.id;
 
-    // Get PR context
-    let prDiff = "", prTitle = "", prBody = "", filesList = "";
+    // Get PR context + all comments for conversation context
+    let prTitle = "", prBody = "", filesList = "", prCommentsContext = "";
 
     try {
       await safeUpdate(octokit, owner, repo, replyCommentId,
-        `> @${sender} — got it\n\n📖 Reading PR... _(${selectedModel.label}, ${modeLabel})_\n\n_Delete this comment to cancel._`);
+        `> @${sender} — got it\n\n📖 Reading PR...\n💬 Loading conversation context... _(${selectedModel.label}, ${modeLabel})_\n\n_Delete this comment to cancel._`);
 
       const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: issueNumber });
       prTitle = pr.title;
@@ -202,10 +289,8 @@ async function run() {
       filesList = files.map((f: { filename: string; additions: number; deletions: number; status: string }) =>
         `- ${f.filename} (+${f.additions}/-${f.deletions}) [${f.status}]`).join("\n");
 
-      const maxDiff = modelTier === "haiku" ? 30000 : modelTier === "sonnet" ? 60000 : 100000;
-      const diffResp = await octokit.pulls.get({ owner, repo, pull_number: issueNumber, mediaType: { format: "diff" } });
-      prDiff = String(diffResp.data);
-      if (prDiff.length > maxDiff) prDiff = prDiff.slice(0, maxDiff) + "\n\n... (truncated)";
+      // Load all PR comments for conversation context
+      prCommentsContext = await getPRCommentsContext(octokit, owner, repo, issueNumber);
     } catch (e: unknown) {
       core.warning(`PR context error: ${e instanceof Error ? e.message : e}`);
     }
@@ -219,14 +304,23 @@ async function run() {
       footer = `_Add \`ANTHROPIC_API_KEY\` for AI analysis._`;
     } else {
       await safeUpdate(octokit, owner, repo, replyCommentId,
-        `> @${sender} — got it\n\n📖 Reading PR...\n🔍 Analyzing with **${selectedModel.label}**...\n⚙️ ${modeLabel}\n\n_Delete this comment to cancel._`);
+        `> @${sender} — got it\n\n📖 Reading PR...\n💬 Loaded conversation context\n🔍 Analyzing with **${selectedModel.label}**...\n⚙️ ${modeLabel}\n\n_Delete this comment to cancel._`);
 
-      const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList);
+      const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prCommentsContext);
       result = r.text;
 
+      const durationMs = Date.now() - startTime;
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "— %";
-      footer = `Kai (Kodif AI) | **${selectedModel.label}** | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+      footer = `Kai (Kodif AI) | **${selectedModel.label}** | [RTK](https://github.com/rtk-ai/rtk) saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+
+      // Audit: log completion
+      auditLog(auditDb, {
+        sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
+        model: selectedModel.label, message: rawMessage, durationMs,
+        costUsd: r.costUsd, tokensIn: r.inputTokens, tokensOut: r.outputTokens,
+        rtkSavings: rtkPct, status: "completed",
+      });
     }
 
     if (!(await commentExists(octokit, owner, repo, replyCommentId))) {
@@ -242,6 +336,16 @@ async function run() {
     // Global error handler — ALWAYS post error to PR, never silently crash
     const msg = error instanceof Error ? error.message : String(error);
     core.error(msg);
+
+    // Audit: log error
+    try {
+      const db = initAuditDb();
+      auditLog(db, {
+        sender: sender || "unknown", repo: owner && repo ? `${owner}/${repo}` : "unknown",
+        prNumber: 0, model: "unknown", message: rawMessage,
+        status: "error", error: msg.slice(0, 500),
+      });
+    } catch { /* audit itself should never crash the handler */ }
 
     if (octokit && owner && repo) {
       const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}\n\n⚠️ **Kai error:**\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\nCheck runner logs or contact infra team.\n\n---\n<sub>Kai (Kodif AI)</sub>`;
