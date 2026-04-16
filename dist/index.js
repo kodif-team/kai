@@ -27902,7 +27902,7 @@ function runCLIWithHeartbeat(apiKey, modelId, prompt, isRoot, hb, db, runId) {
             rtkSavings = g.savings_percent ?? g.percent ?? "";
           } catch {
             const m = raw.match(/(\d+(?:\.\d+)?)\s*%/);
-            rtkSavings = m ? m[1] + "%" : raw;
+            rtkSavings = m ? m[1] + "%" : "";
           }
         } catch {
         }
