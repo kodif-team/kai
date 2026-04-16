@@ -188,6 +188,12 @@ function isArchitectureQuestion(msg: string): boolean {
   return /architect|infra|service|microservice|system|overview|how.*work|database|schema|stack/i.test(msg);
 }
 
+function isMetaQuestion(msg: string): boolean {
+  return /^(who are you|what are you|how to use|help|what can you do|кто ты|как пользоваться)/i.test(msg);
+}
+
+const META_TEMPLATE = `Я помощник по работе с проектом Kodif. Моя задача — помочь с минимальным расходом токенов и дать приемлемый опыт по вопросам архитектуры Kodif. Как пользоваться: пишите комментарий с задачей для @kai; если нужен более глубокий анализ, добавьте use sonnet или use opus; режим loop (пока в разработке) предназначен для проверки гипотез в песочнице, где агент сможет работать с полными правами, автономно делать коммиты и открывать PR.`;
+
 function buildCLIPrompt(
   userMessage: string, prTitle: string, prBody: string,
   filesList: string, prCommentsContext: string, repoFullName: string,
@@ -199,6 +205,10 @@ function buildCLIPrompt(
   ];
   if (prCommentsContext) {
     parts.push(`Prior conversation:\n${prCommentsContext}`);
+  }
+  if (isMetaQuestion(userMessage)) {
+    // Meta question — return fixed template, no CLI needed
+    return META_TEMPLATE;
   }
   if (isArchitectureQuestion(userMessage)) {
     parts.push(
@@ -467,6 +477,19 @@ async function run() {
       runId, repo: `${owner}/${repo}`, prNumber: issueNumber,
       sender, commentId, model: selectedModel.label,
     });
+    sessionUpdate(auditDb, runId, "queued");
+
+    // Meta question — instant reply, no CLI needed
+    if (isMetaQuestion(userMessage)) {
+      const { data: metaReply } = await octokit.issues.createComment({
+        owner, repo, issue_number: issueNumber,
+        body: `> @${sender}: ${rawMessage}\n\n${META_TEMPLATE}\n\n---\n<sub>Kai · template · 0 tokens · $0.00</sub>`,
+      });
+      sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: metaReply.id });
+      auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: "template", message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, status: "completed" });
+      core.info("Meta question — template reply");
+      return;
+    }
 
     // Create working comment with initial spinner
     const { data: reply } = await octokit.issues.createComment({
@@ -474,14 +497,14 @@ async function run() {
       body: spinnerFrame(0, 0, selectedModel.label),
     });
     replyCommentId = reply.id;
-    sessionUpdate(auditDb, runId, "working-comment", { replyCommentId });
+    sessionUpdate(auditDb, runId, "analyzing", { replyCommentId });
 
     // Get PR context
     let prTitle = "", prBody = "", filesList = "", prCommentsContext = "";
 
     try {
       await safeUpdate(octokit, owner, repo, replyCommentId, spinnerFrame(1, 2, selectedModel.label));
-      sessionUpdate(auditDb, runId, "loading-context");
+      sessionUpdate(auditDb, runId, "analyzing");
 
       const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: issueNumber });
       prTitle = pr.title;
@@ -522,7 +545,7 @@ async function run() {
       result = `📋 **PR: ${prTitle}**\n\nFiles:\n${filesList}`;
       footer = `_Add \`ANTHROPIC_API_KEY\` for AI analysis._`;
     } else {
-      sessionUpdate(auditDb, runId, "cli-starting");
+      sessionUpdate(auditDb, runId, "executing");
       await safeUpdate(octokit, owner, repo, replyCommentId, spinnerFrame(2, 5, selectedModel.label));
 
       // Hide infrastructure files from Claude — bot should only see project code
@@ -567,8 +590,10 @@ async function run() {
       return;
     }
 
+    sessionUpdate(auditDb, runId, "responding");
     await safeUpdate(octokit, owner, repo, replyCommentId,
       `> @${sender}: ${rawMessage}\n\n${result}\n\n---\n<sub>${footer}</sub>`);
+    sessionUpdate(auditDb, runId, "completed", { status: "completed" });
 
     core.info("Done");
   } catch (error) {

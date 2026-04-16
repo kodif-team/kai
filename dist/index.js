@@ -27760,6 +27760,10 @@ To explore: kodif-team/architect \u2014 .claude/CLAUDE.md, service-summaries/, d
 function isArchitectureQuestion(msg) {
   return /architect|infra|service|microservice|system|overview|how.*work|database|schema|stack/i.test(msg);
 }
+function isMetaQuestion(msg) {
+  return /^(who are you|what are you|how to use|help|what can you do|кто ты|как пользоваться)/i.test(msg);
+}
+var META_TEMPLATE = `\u042F \u043F\u043E\u043C\u043E\u0449\u043D\u0438\u043A \u043F\u043E \u0440\u0430\u0431\u043E\u0442\u0435 \u0441 \u043F\u0440\u043E\u0435\u043A\u0442\u043E\u043C Kodif. \u041C\u043E\u044F \u0437\u0430\u0434\u0430\u0447\u0430 \u2014 \u043F\u043E\u043C\u043E\u0447\u044C \u0441 \u043C\u0438\u043D\u0438\u043C\u0430\u043B\u044C\u043D\u044B\u043C \u0440\u0430\u0441\u0445\u043E\u0434\u043E\u043C \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0438 \u0434\u0430\u0442\u044C \u043F\u0440\u0438\u0435\u043C\u043B\u0435\u043C\u044B\u0439 \u043E\u043F\u044B\u0442 \u043F\u043E \u0432\u043E\u043F\u0440\u043E\u0441\u0430\u043C \u0430\u0440\u0445\u0438\u0442\u0435\u043A\u0442\u0443\u0440\u044B Kodif. \u041A\u0430\u043A \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C\u0441\u044F: \u043F\u0438\u0448\u0438\u0442\u0435 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u0441 \u0437\u0430\u0434\u0430\u0447\u0435\u0439 \u0434\u043B\u044F @kai; \u0435\u0441\u043B\u0438 \u043D\u0443\u0436\u0435\u043D \u0431\u043E\u043B\u0435\u0435 \u0433\u043B\u0443\u0431\u043E\u043A\u0438\u0439 \u0430\u043D\u0430\u043B\u0438\u0437, \u0434\u043E\u0431\u0430\u0432\u044C\u0442\u0435 use sonnet \u0438\u043B\u0438 use opus; \u0440\u0435\u0436\u0438\u043C loop (\u043F\u043E\u043A\u0430 \u0432 \u0440\u0430\u0437\u0440\u0430\u0431\u043E\u0442\u043A\u0435) \u043F\u0440\u0435\u0434\u043D\u0430\u0437\u043D\u0430\u0447\u0435\u043D \u0434\u043B\u044F \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438 \u0433\u0438\u043F\u043E\u0442\u0435\u0437 \u0432 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0435, \u0433\u0434\u0435 \u0430\u0433\u0435\u043D\u0442 \u0441\u043C\u043E\u0436\u0435\u0442 \u0440\u0430\u0431\u043E\u0442\u0430\u0442\u044C \u0441 \u043F\u043E\u043B\u043D\u044B\u043C\u0438 \u043F\u0440\u0430\u0432\u0430\u043C\u0438, \u0430\u0432\u0442\u043E\u043D\u043E\u043C\u043D\u043E \u0434\u0435\u043B\u0430\u0442\u044C \u043A\u043E\u043C\u043C\u0438\u0442\u044B \u0438 \u043E\u0442\u043A\u0440\u044B\u0432\u0430\u0442\u044C PR.`;
 function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext, repoFullName) {
   const parts = [
     `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}. PR: "${prTitle}"`,
@@ -27770,6 +27774,9 @@ ${filesList}`
   if (prCommentsContext) {
     parts.push(`Prior conversation:
 ${prCommentsContext}`);
+  }
+  if (isMetaQuestion(userMessage)) {
+    return META_TEMPLATE;
   }
   if (isArchitectureQuestion(userMessage)) {
     parts.push(
@@ -28002,6 +28009,24 @@ async function run() {
       commentId,
       model: selectedModel.label
     });
+    sessionUpdate(auditDb, runId, "queued");
+    if (isMetaQuestion(userMessage)) {
+      const { data: metaReply } = await octokit.issues.createComment({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body: `> @${sender}: ${rawMessage}
+
+${META_TEMPLATE}
+
+---
+<sub>Kai \xB7 template \xB7 0 tokens \xB7 $0.00</sub>`
+      });
+      sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: metaReply.id });
+      auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: "template", message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, status: "completed" });
+      core.info("Meta question \u2014 template reply");
+      return;
+    }
     const { data: reply } = await octokit.issues.createComment({
       owner,
       repo,
@@ -28009,11 +28034,11 @@ async function run() {
       body: spinnerFrame(0, 0, selectedModel.label)
     });
     replyCommentId = reply.id;
-    sessionUpdate(auditDb, runId, "working-comment", { replyCommentId });
+    sessionUpdate(auditDb, runId, "analyzing", { replyCommentId });
     let prTitle = "", prBody = "", filesList = "", prCommentsContext = "";
     try {
       await safeUpdate(octokit, owner, repo, replyCommentId, spinnerFrame(1, 2, selectedModel.label));
-      sessionUpdate(auditDb, runId, "loading-context");
+      sessionUpdate(auditDb, runId, "analyzing");
       const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: issueNumber });
       prTitle = pr.title;
       prBody = pr.body ?? "";
@@ -28051,7 +28076,7 @@ Files:
 ${filesList}`;
       footer = `_Add \`ANTHROPIC_API_KEY\` for AI analysis._`;
     } else {
-      sessionUpdate(auditDb, runId, "cli-starting");
+      sessionUpdate(auditDb, runId, "executing");
       await safeUpdate(octokit, owner, repo, replyCommentId, spinnerFrame(2, 5, selectedModel.label));
       try {
         (0, import_node_child_process.execSync)(`echo '.github/
@@ -28113,6 +28138,7 @@ CLAUDE.md
       core.info("Cancelled");
       return;
     }
+    sessionUpdate(auditDb, runId, "responding");
     await safeUpdate(
       octokit,
       owner,
@@ -28125,6 +28151,7 @@ ${result}
 ---
 <sub>${footer}</sub>`
     );
+    sessionUpdate(auditDb, runId, "completed", { status: "completed" });
     core.info("Done");
   } catch (error2) {
     const msg = error2 instanceof Error ? error2.message : String(error2);
