@@ -4261,18 +4261,18 @@ var require_webidl = __commonJS({
     webidl.errors.exception = function(message) {
       return new TypeError(`${message.header}: ${message.message}`);
     };
-    webidl.errors.conversionFailed = function(context) {
-      const plural = context.types.length === 1 ? "" : " one of";
-      const message = `${context.argument} could not be converted to${plural}: ${context.types.join(", ")}.`;
+    webidl.errors.conversionFailed = function(context2) {
+      const plural = context2.types.length === 1 ? "" : " one of";
+      const message = `${context2.argument} could not be converted to${plural}: ${context2.types.join(", ")}.`;
       return webidl.errors.exception({
-        header: context.prefix,
+        header: context2.prefix,
         message
       });
     };
-    webidl.errors.invalidArgument = function(context) {
+    webidl.errors.invalidArgument = function(context2) {
       return webidl.errors.exception({
-        header: context.prefix,
-        message: `"${context.value}" is an invalid ${context.type}.`
+        header: context2.prefix,
+        message: `"${context2.value}" is an invalid ${context2.type}.`
       });
     };
     webidl.brandCheck = function(V, I, opts = void 0) {
@@ -9598,15 +9598,15 @@ var require_api_request = __commonJS({
         }
         addSignal(this, signal);
       }
-      onConnect(abort, context) {
+      onConnect(abort, context2) {
         if (!this.callback) {
           throw new RequestAbortedError();
         }
         this.abort = abort;
-        this.context = context;
+        this.context = context2;
       }
       onHeaders(statusCode, rawHeaders, resume, statusMessage) {
-        const { callback, opaque, abort, context, responseHeaders, highWaterMark } = this;
+        const { callback, opaque, abort, context: context2, responseHeaders, highWaterMark } = this;
         const headers = responseHeaders === "raw" ? util.parseRawHeaders(rawHeaders) : util.parseHeaders(rawHeaders);
         if (statusCode < 200) {
           if (this.onInfo) {
@@ -9633,7 +9633,7 @@ var require_api_request = __commonJS({
               trailers: this.trailers,
               opaque,
               body,
-              context
+              context: context2
             });
           }
         }
@@ -9753,15 +9753,15 @@ var require_api_stream = __commonJS({
         }
         addSignal(this, signal);
       }
-      onConnect(abort, context) {
+      onConnect(abort, context2) {
         if (!this.callback) {
           throw new RequestAbortedError();
         }
         this.abort = abort;
-        this.context = context;
+        this.context = context2;
       }
       onHeaders(statusCode, rawHeaders, resume, statusMessage) {
-        const { factory, opaque, context, callback, responseHeaders } = this;
+        const { factory, opaque, context: context2, callback, responseHeaders } = this;
         const headers = responseHeaders === "raw" ? util.parseRawHeaders(rawHeaders) : util.parseHeaders(rawHeaders);
         if (statusCode < 200) {
           if (this.onInfo) {
@@ -9789,7 +9789,7 @@ var require_api_stream = __commonJS({
             statusCode,
             headers,
             opaque,
-            context
+            context: context2
           });
           if (!res || typeof res.write !== "function" || typeof res.end !== "function" || typeof res.on !== "function") {
             throw new InvalidReturnValueError("expected Writable");
@@ -9981,17 +9981,17 @@ var require_api_pipeline = __commonJS({
         this.res = null;
         addSignal(this, signal);
       }
-      onConnect(abort, context) {
+      onConnect(abort, context2) {
         const { ret, res } = this;
         assert(!res, "pipeline cannot be retried");
         if (ret.destroyed) {
           throw new RequestAbortedError();
         }
         this.abort = abort;
-        this.context = context;
+        this.context = context2;
       }
       onHeaders(statusCode, rawHeaders, resume) {
-        const { opaque, handler: handler2, context } = this;
+        const { opaque, handler: handler2, context: context2 } = this;
         if (statusCode < 200) {
           if (this.onInfo) {
             const headers = this.responseHeaders === "raw" ? util.parseRawHeaders(rawHeaders) : util.parseHeaders(rawHeaders);
@@ -10009,7 +10009,7 @@ var require_api_pipeline = __commonJS({
             headers,
             opaque,
             body: this.res,
-            context
+            context: context2
           });
         } catch (err) {
           this.res.on("error", util.nop);
@@ -10093,7 +10093,7 @@ var require_api_upgrade = __commonJS({
         this.context = null;
         addSignal(this, signal);
       }
-      onConnect(abort, context) {
+      onConnect(abort, context2) {
         if (!this.callback) {
           throw new RequestAbortedError();
         }
@@ -10104,7 +10104,7 @@ var require_api_upgrade = __commonJS({
         throw new SocketError("bad upgrade", null);
       }
       onUpgrade(statusCode, rawHeaders, socket) {
-        const { callback, opaque, context } = this;
+        const { callback, opaque, context: context2 } = this;
         assert.strictEqual(statusCode, 101);
         removeSignal(this);
         this.callback = null;
@@ -10113,7 +10113,7 @@ var require_api_upgrade = __commonJS({
           headers,
           socket,
           opaque,
-          context
+          context: context2
         });
       }
       onError(err) {
@@ -10181,18 +10181,18 @@ var require_api_connect = __commonJS({
         this.abort = null;
         addSignal(this, signal);
       }
-      onConnect(abort, context) {
+      onConnect(abort, context2) {
         if (!this.callback) {
           throw new RequestAbortedError();
         }
         this.abort = abort;
-        this.context = context;
+        this.context = context2;
       }
       onHeaders() {
         throw new SocketError("bad connect", null);
       }
       onUpgrade(statusCode, rawHeaders, socket) {
-        const { callback, opaque, context } = this;
+        const { callback, opaque, context: context2 } = this;
         removeSignal(this);
         this.callback = null;
         let headers = rawHeaders;
@@ -10204,7 +10204,7 @@ var require_api_connect = __commonJS({
           headers,
           socket,
           opaque,
-          context
+          context: context2
         });
       }
       onError(err) {
@@ -20305,8 +20305,8 @@ var require_dist_node3 = __commonJS({
     function isKeyOperator2(operator) {
       return operator === ";" || operator === "&" || operator === "?";
     }
-    function getValues2(context, operator, key, modifier) {
-      var value = context[key], result = [];
+    function getValues2(context2, operator, key, modifier) {
+      var value = context2[key], result = [];
       if (isDefined2(value) && value !== "") {
         if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
           value = value.toString();
@@ -20370,7 +20370,7 @@ var require_dist_node3 = __commonJS({
         expand: expand2.bind(null, template)
       };
     }
-    function expand2(template, context) {
+    function expand2(template, context2) {
       var operators = ["+", "#", ".", "/", ";", "?", "&"];
       template = template.replace(
         /\{([^\{\}]+)\}|([^\{\}]+)/g,
@@ -20384,7 +20384,7 @@ var require_dist_node3 = __commonJS({
             }
             expression.split(/,/g).forEach(function(variable) {
               var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
-              values.push(getValues2(context, operator, tmp[1], tmp[2] || tmp[3]));
+              values.push(getValues2(context2, operator, tmp[1], tmp[2] || tmp[3]));
             });
             if (operator && operator !== "+") {
               var separator = ",";
@@ -24280,8 +24280,8 @@ function isDefined(value) {
 function isKeyOperator(operator) {
   return operator === ";" || operator === "&" || operator === "?";
 }
-function getValues(context, operator, key, modifier) {
-  var value = context[key], result = [];
+function getValues(context2, operator, key, modifier) {
+  var value = context2[key], result = [];
   if (isDefined(value) && value !== "") {
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       value = value.toString();
@@ -24345,7 +24345,7 @@ function parseUrl(template) {
     expand: expand.bind(null, template)
   };
 }
-function expand(template, context) {
+function expand(template, context2) {
   var operators = ["+", "#", ".", "/", ";", "?", "&"];
   template = template.replace(
     /\{([^\{\}]+)\}|([^\{\}]+)/g,
@@ -24359,7 +24359,7 @@ function expand(template, context) {
         }
         expression.split(/,/g).forEach(function(variable) {
           var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable);
-          values.push(getValues(context, operator, tmp[1], tmp[2] || tmp[3]));
+          values.push(getValues(context2, operator, tmp[1], tmp[2] || tmp[3]));
         });
         if (operator && operator !== "+") {
           var separator = ",";
@@ -27595,27 +27595,29 @@ function parseModelFromMessage(message) {
   }
   return { model: DEFAULT_MODEL, cleanMessage: message };
 }
-function hasClaudeCLI() {
+function requireClaudeCLI() {
   try {
     (0, import_node_child_process.execSync)("claude --version", { stdio: "pipe", timeout: 5e3 });
-    return true;
   } catch {
-    return false;
+    throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
   }
 }
 function requireRTK() {
   try {
     const ver = (0, import_node_child_process.execSync)("rtk --version", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" }).trim();
-    core.info(`RTK found: ${ver}`);
-    (0, import_node_child_process.execSync)('rtk rewrite "git status"', { stdio: "pipe", timeout: 5e3 });
+    const help = (0, import_node_child_process.execSync)("rtk --help", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" });
+    if (!help.includes("rewrite")) {
+      throw new Error("Wrong rtk binary (missing 'rewrite' command). Need rtk-ai/rtk, not crates.io rtk.");
+    }
+    core.info(`RTK verified: ${ver}`);
     return ver;
   } catch (e) {
+    if (e instanceof Error && e.message.includes("Wrong rtk")) throw e;
     const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
-    throw new Error(`RTK is required but not available: ${msg}. Running without RTK wastes money \u2014 fix the runner.`);
+    throw new Error(`RTK is required but not available: ${msg}`);
   }
 }
-async function callClaudeCLI(apiKey, modelId, userMessage, prTitle, prBody, filesList, diff) {
-  const rtk = hasRTK();
+async function callClaudeCLI(apiKey, modelId, userMessage, prTitle, prBody, filesList) {
   const prompt = [
     `You are Kai \u2014 the Kodif AI engineering agent.`,
     `PR: "${prTitle}"`,
@@ -27634,7 +27636,7 @@ Be concise and actionable. Use markdown. Reference files and line numbers.`
   const isRoot = process.getuid?.() === 0;
   const claudeArgs = `-p --dangerously-skip-permissions --output-format json --max-turns 15 --model ${modelId}`;
   const cmd = isRoot ? `su -s /bin/bash kai -c 'ANTHROPIC_API_KEY=${apiKey} claude ${claudeArgs}'` : `claude ${claudeArgs}`;
-  core.info(`Executing: ${rtk ? "rtk \u2192 " : ""}claude CLI (${modelId})`);
+  core.info(`Executing: claude CLI (${modelId})`);
   const output = (0, import_node_child_process.execSync)(cmd, {
     input: prompt,
     env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
@@ -27644,19 +27646,17 @@ Be concise and actionable. Use markdown. Reference files and line numbers.`
   });
   const json = JSON.parse(output);
   let rtkSavings = "";
-  if (rtk) {
+  try {
+    const gainCmd = isRoot ? `su -s /bin/bash kai -c 'rtk gain --json 2>/dev/null || rtk gain 2>/dev/null'` : `rtk gain --json 2>/dev/null || rtk gain 2>/dev/null`;
+    const raw = (0, import_node_child_process.execSync)(gainCmd, { encoding: "utf-8", timeout: 5e3 }).trim();
     try {
-      const gainCmd = isRoot ? `su -s /bin/bash kai -c 'rtk gain --json 2>/dev/null || rtk gain 2>/dev/null'` : `rtk gain --json 2>/dev/null || rtk gain 2>/dev/null`;
-      const raw = (0, import_node_child_process.execSync)(gainCmd, { encoding: "utf-8", timeout: 5e3 }).trim();
-      try {
-        const g = JSON.parse(raw);
-        rtkSavings = g.savings_percent ?? g.percent ?? "";
-      } catch {
-        const m = raw.match(/(\d+(?:\.\d+)?)\s*%/);
-        rtkSavings = m ? m[1] + "%" : raw;
-      }
+      const g = JSON.parse(raw);
+      rtkSavings = g.savings_percent ?? g.percent ?? "";
     } catch {
+      const m = raw.match(/(\d+(?:\.\d+)?)\s*%/);
+      rtkSavings = m ? m[1] + "%" : raw;
     }
+  } catch {
   }
   return {
     text: json.result ?? json.content ?? output,
@@ -27664,21 +27664,22 @@ Be concise and actionable. Use markdown. Reference files and line numbers.`
     numTurns: json.num_turns ?? 1,
     inputTokens: (json.usage?.input_tokens ?? 0) + (json.usage?.cache_read_input_tokens ?? 0) + (json.usage?.cache_creation_input_tokens ?? 0),
     outputTokens: json.usage?.output_tokens ?? 0,
-    mode: "cli",
-    rtk,
     rtkSavings
   };
 }
 async function run() {
+  let octokit = null;
+  let owner = "", repo = "", replyCommentId = 0;
+  let sender = "", rawMessage = "";
   try {
     const trigger = core.getInput("trigger_phrase") || "@kai";
     const githubToken = core.getInput("github_token");
     const anthropicApiKey = core.getInput("anthropic_api_key");
-    const { context } = github;
-    const event = context.eventName;
-    let commentBody = "", commentId = 0, issueNumber = 0, sender = "";
+    const { context: context2 } = github;
+    const event = context2.eventName;
+    let commentBody = "", commentId = 0, issueNumber = 0;
     if (event === "issue_comment" || event === "pull_request_review_comment") {
-      const payload = context.payload;
+      const payload = context2.payload;
       commentBody = payload.comment?.body ?? "";
       commentId = payload.comment?.id ?? 0;
       sender = payload.comment?.user?.login ?? "";
@@ -27687,19 +27688,17 @@ async function run() {
     if (!commentBody.toLowerCase().includes(trigger.toLowerCase())) return;
     if (sender.includes("[bot]")) return;
     core.info(`Triggered by @${sender} in #${issueNumber}`);
-    const octokit = new Octokit2({ auth: githubToken });
-    const { owner, repo } = context.repo;
+    octokit = new Octokit2({ auth: githubToken });
+    ({ owner, repo } = context2.repo);
     try {
       await octokit.reactions.createForIssueComment({ owner, repo, comment_id: commentId, content: "eyes" });
     } catch {
     }
     const idx = commentBody.toLowerCase().indexOf(trigger.toLowerCase());
-    const rawMessage = commentBody.slice(idx + trigger.length).trim() || "review this PR";
+    rawMessage = commentBody.slice(idx + trigger.length).trim() || "review this PR";
     const { model: modelTier, cleanMessage: userMessage } = parseModelFromMessage(rawMessage);
     const selectedModel = MODELS[modelTier];
-    if (!hasClaudeCLI()) {
-      throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
-    }
+    requireClaudeCLI();
     const rtkVersion = requireRTK();
     const modeLabel = "CLI + RTK";
     core.info(`Mode: ${modeLabel} | Model: ${selectedModel.label} | RTK: ${rtkVersion}`);
@@ -27713,13 +27712,14 @@ async function run() {
 
 _Delete this comment to cancel._`
     });
+    replyCommentId = reply.id;
     let prDiff = "", prTitle = "", prBody = "", filesList = "";
     try {
       await safeUpdate(
         octokit,
         owner,
         repo,
-        reply.id,
+        replyCommentId,
         `> @${sender} \u2014 got it
 
 \u{1F4D6} Reading PR... _(${selectedModel.label}, ${modeLabel})_
@@ -27757,34 +27757,25 @@ Files:
 ${filesList}`;
       footer = `_Add \`ANTHROPIC_API_KEY\` for AI analysis._`;
     } else {
-      try {
-        await safeUpdate(
-          octokit,
-          owner,
-          repo,
-          reply.id,
-          `> @${sender} \u2014 got it
+      await safeUpdate(
+        octokit,
+        owner,
+        repo,
+        replyCommentId,
+        `> @${sender} \u2014 got it
 
 \u{1F4D6} Reading PR...
 \u{1F50D} Analyzing... _(${selectedModel.label}, ${modeLabel})_
 
 _Delete this comment to cancel._`
-        );
-        const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
-        result = r.text;
-        const totalTokens = r.inputTokens + r.outputTokens;
-        const rtkPct = r.rtkSavings || "\u2014 %";
-        footer = `RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        core.error(`Claude CLI error: ${msg}`);
-        result = `\u26A0\uFE0F CLI Error: \`${msg.slice(0, 200)}\`
-
-Check runner: Claude CLI + RTK must be installed and working.`;
-        footer = "";
-      }
+      );
+      const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList);
+      result = r.text;
+      const totalTokens = r.inputTokens + r.outputTokens;
+      const rtkPct = r.rtkSavings || "\u2014 %";
+      footer = `RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
     }
-    if (!await commentExists(octokit, owner, repo, reply.id)) {
+    if (!await commentExists(octokit, owner, repo, replyCommentId)) {
       core.info("Cancelled");
       return;
     }
@@ -27792,7 +27783,7 @@ Check runner: Claude CLI + RTK must be installed and working.`;
       octokit,
       owner,
       repo,
-      reply.id,
+      replyCommentId,
       `> @${sender}: ${rawMessage}
 
 ${result}
@@ -27802,7 +27793,34 @@ ${result}
     );
     core.info("Done");
   } catch (error2) {
-    if (error2 instanceof Error) core.setFailed(error2.message);
+    const msg = error2 instanceof Error ? error2.message : String(error2);
+    core.error(msg);
+    if (octokit && owner && repo) {
+      const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}
+
+\u26A0\uFE0F **Kai error:**
+\`\`\`
+${msg.slice(0, 500)}
+\`\`\`
+
+Check runner logs or contact infra team.
+
+---
+<sub>Kai (Kodif AI)</sub>`;
+      try {
+        if (replyCommentId) {
+          await safeUpdate(octokit, owner, repo, replyCommentId, errorBody);
+        } else {
+          const issueNumber = github.context.payload.issue?.number ?? github.context.payload.pull_request?.number ?? 0;
+          if (issueNumber) {
+            await octokit.issues.createComment({ owner, repo, issue_number: issueNumber, body: errorBody });
+          }
+        }
+      } catch (postErr) {
+        core.error(`Failed to post error to PR: ${postErr}`);
+      }
+    }
+    core.setFailed(msg);
   }
 }
 async function safeUpdate(o, owner, repo, id, body) {
