@@ -27678,11 +27678,14 @@ function parseIntentOnly(raw) {
     return null;
   }
 }
-function localRouterPrompt(message) {
-  return `Classify PR comment. Intents: simple-answer|review|write-fix|commit-write|job-candidate|meta-template|spam-abuse|needs-input|stop|alert|unsupported|ignore.
-Rules: "stop"\u2192stop; "who are you"\u2192meta-template; weather/music/off-topic\u2192spam-abuse; empty/vague\u2192needs-input; "commit"/"push"\u2192commit-write; imperative add/fix/update\u2192write-fix; review/bug/risk\u2192review; question\u2192simple-answer.
+function localRouterMessages(message) {
+  return [{
+    role: "user",
+    content: `Classify PR comment. Intents: simple-answer|review|write-fix|commit-write|job-candidate|meta-template|spam-abuse|needs-input|stop|alert|unsupported|ignore.
+Rules: "stop"\u2192stop; "who are you"/help\u2192meta-template; weather/music/jokes\u2192spam-abuse; empty/vague\u2192needs-input; "commit"/"push"\u2192commit-write; imperative add/fix/update\u2192write-fix; review/bug/risk\u2192review; question\u2192simple-answer.
 Return {"intent":"..."}.
-Comment: ${JSON.stringify(message)}`;
+Comment: ${JSON.stringify(message)}`
+  }];
 }
 var ROUTER_GRAMMAR = 'root ::= "{\\"intent\\":\\"" intent "\\"}"\nintent ::= "simple-answer" | "review" | "write-fix" | "commit-write" | "job-candidate" | "meta-template" | "spam-abuse" | "needs-input" | "stop" | "alert" | "unsupported" | "ignore"';
 async function routeEventWithLocalLLM(rawMessage, modelTier, options) {
@@ -27702,7 +27705,7 @@ async function routeEventWithLocalLLM(rawMessage, modelTier, options) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: options?.model ?? process.env.KAI_ROUTER_MODEL ?? "qwen2.5-0.5b-instruct",
-        messages: [{ role: "user", content: localRouterPrompt(rules.normalizedMessage) }],
+        messages: localRouterMessages(rules.normalizedMessage),
         stream: false,
         temperature: 0,
         max_tokens: 20,

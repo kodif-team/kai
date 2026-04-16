@@ -97,12 +97,19 @@ function parseIntentOnly(raw: string): RouterIntent | null {
   }
 }
 
-// Compact prompt — every token counts for CPU latency.
-function localRouterPrompt(message: string): string {
-  return `Classify PR comment. Intents: simple-answer|review|write-fix|commit-write|job-candidate|meta-template|spam-abuse|needs-input|stop|alert|unsupported|ignore.
-Rules: "stop"→stop; "who are you"→meta-template; weather/music/off-topic→spam-abuse; empty/vague→needs-input; "commit"/"push"→commit-write; imperative add/fix/update→write-fix; review/bug/risk→review; question→simple-answer.
+// FIRST filter layer before rtk + paid LLM. Keep tight; downstream handles nuance.
+// Tested on Qwen 2.5 0.5B: few-shot and multi-line system rules both regressed
+// (60% and 10% accuracy). Compact inline rules in a single user message scored best.
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+function localRouterMessages(message: string): ChatMessage[] {
+  return [{
+    role: "user",
+    content: `Classify PR comment. Intents: simple-answer|review|write-fix|commit-write|job-candidate|meta-template|spam-abuse|needs-input|stop|alert|unsupported|ignore.
+Rules: "stop"→stop; "who are you"/help→meta-template; weather/music/jokes→spam-abuse; empty/vague→needs-input; "commit"/"push"→commit-write; imperative add/fix/update→write-fix; review/bug/risk→review; question→simple-answer.
 Return {"intent":"..."}.
-Comment: ${JSON.stringify(message)}`;
+Comment: ${JSON.stringify(message)}`,
+  }];
 }
 
 // GBNF grammar: constrain output to a single enum value wrapped in the smallest JSON we need.
@@ -134,7 +141,7 @@ export async function routeEventWithLocalLLM(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: options?.model ?? process.env.KAI_ROUTER_MODEL ?? "qwen2.5-0.5b-instruct",
-        messages: [{ role: "user", content: localRouterPrompt(rules.normalizedMessage) }],
+        messages: localRouterMessages(rules.normalizedMessage),
         stream: false,
         temperature: 0,
         max_tokens: 20,
