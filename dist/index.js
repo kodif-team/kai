@@ -27749,6 +27749,17 @@ function requireRTK() {
     throw new Error(`RTK is required but not available: ${msg}`);
   }
 }
+var KODIF_ARCH_CONTEXT = `
+Kodif platform: 33+ microservices. Architecture repo: kodif-team/architect
+DBs: executor-db (kodif, PostgreSQL 13), chat-db (chat, PostgreSQL 15), ml-db (zendesk-json-db-pgadmin, PostgreSQL 13). All sync to BigQuery.
+Key services: Nexus (core API, port 8000), ml-service (ML/embeddings, 8005), tools (tool execution, 8002), integrations (CRM connectors, 8004), chatbot (chat engine, 8003), kodif-chat (chat backend, 8081), kodif-executor (flow engine, Java, 8080), kodif-gateway (API gateway, 8087), kodif-dashboard (frontend, 3000), kodif-chat-widget (widget, 3001), kodif-analytics (reports), insights-api, insights-service, index-service (search), autopilot (policy automation), playground-service.
+Infra: Redis, LocalStack (SQS), Milvus (vectors), etcd, MinIO.
+Bootstrap: docker-compose in architect/bootstrap/. Repos cloned to architect/repos/.
+To explore architecture: clone kodif-team/architect and read .claude/CLAUDE.md, service-summaries/, db-schemas/, feature-deepdives/.
+`.trim();
+function isArchitectureQuestion(msg) {
+  return /architect|infra|service|microservice|system|overview|how.*work|database|schema|stack/i.test(msg);
+}
 function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext) {
   const parts = [
     `Kai, AI code reviewer. PR: "${prTitle}"`,
@@ -27759,6 +27770,10 @@ ${filesList}`
   if (prCommentsContext) {
     parts.push(`Prior conversation:
 ${prCommentsContext}`);
+  }
+  if (isArchitectureQuestion(userMessage)) {
+    parts.push(`Kodif architecture context:
+${KODIF_ARCH_CONTEXT}`);
   }
   parts.push(
     `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
