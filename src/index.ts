@@ -210,15 +210,22 @@ async function run() {
         await safeUpdate(octokit, owner, repo, reply.id,
           `> @${sender} — got it\n\n📖 Reading PR...\n🔍 Analyzing... _(${selectedModel.label}, ${modeLabel})_\n\n_Delete this comment to cancel._`);
 
+        let usedCLI = false;
         if (useCLI) {
-          const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
-          result = r.text;
-          footer = `_**${selectedModel.label}** · CLI mode${r.rtk ? " + RTK" : ""} · Cost: $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) · \`use sonnet\` / \`use opus\` for deeper analysis_`;
-        } else {
+          try {
+            const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
+            result = r.text;
+            footer = `_**${selectedModel.label}** · CLI${r.rtk ? " + RTK" : ""} · $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) · \`use sonnet\` / \`use opus\`_`;
+            usedCLI = true;
+          } catch (cliErr: unknown) {
+            core.warning(`CLI failed, falling back to API: ${cliErr instanceof Error ? cliErr.message.slice(0, 100) : cliErr}`);
+          }
+        }
+        if (!usedCLI) {
           const r = await callClaudeAPI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
           const total = r.inputTokens + r.outputTokens;
           result = r.text;
-          footer = `_**${selectedModel.label}** · API mode · ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${total.toLocaleString()}) · \`use sonnet\` / \`use opus\` for deeper analysis_`;
+          footer = `_**${selectedModel.label}** · API · ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${total.toLocaleString()}) · \`use sonnet\` / \`use opus\`_`;
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);

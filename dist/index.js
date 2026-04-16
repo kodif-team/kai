@@ -33561,15 +33561,22 @@ ${filesList}`;
 
 _Delete this comment to cancel._`
         );
+        let usedCLI = false;
         if (useCLI) {
-          const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
-          result = r.text;
-          footer = `_**${selectedModel.label}** \xB7 CLI mode${r.rtk ? " + RTK" : ""} \xB7 Cost: $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) \xB7 \`use sonnet\` / \`use opus\` for deeper analysis_`;
-        } else {
+          try {
+            const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
+            result = r.text;
+            footer = `_**${selectedModel.label}** \xB7 CLI${r.rtk ? " + RTK" : ""} \xB7 $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) \xB7 \`use sonnet\` / \`use opus\`_`;
+            usedCLI = true;
+          } catch (cliErr) {
+            core.warning(`CLI failed, falling back to API: ${cliErr instanceof Error ? cliErr.message.slice(0, 100) : cliErr}`);
+          }
+        }
+        if (!usedCLI) {
           const r = await callClaudeAPI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
           const total = r.inputTokens + r.outputTokens;
           result = r.text;
-          footer = `_**${selectedModel.label}** \xB7 API mode \xB7 ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${total.toLocaleString()}) \xB7 \`use sonnet\` / \`use opus\` for deeper analysis_`;
+          footer = `_**${selectedModel.label}** \xB7 API \xB7 ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${total.toLocaleString()}) \xB7 \`use sonnet\` / \`use opus\`_`;
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
