@@ -193,7 +193,7 @@ function buildCLIPrompt(
   filesList: string, prCommentsContext: string, repoFullName: string,
 ): string {
   const parts = [
-    `Kai, AI code reviewer. Repo: ${repoFullName}. PR: "${prTitle}"`,
+    `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}. PR: "${prTitle}"`,
     prBody ? `Desc: ${prBody.slice(0, 300)}` : "",
     `Files:\n${filesList}`,
   ];
@@ -213,7 +213,7 @@ function buildCLIPrompt(
       `IGNORE: .github/, .claude/, CLAUDE.md, *.yml workflow files — these are bot infrastructure, not project code.`,
       `Task: ${userMessage}`,
       `IMPORTANT: Answer EXACTLY what the user asked. Do NOT default to security review unless explicitly asked.`,
-      `Rules: concise, markdown, always include repo name and file path (e.g. repo/path/file.py:line), max 50 lines. Don't repeat prior analysis.`,
+      `Rules: concise, markdown, reference files as repos/<service>/path/file.py:line (e.g. repos/ai_test/user_service.py:14), max 50 lines. Don't repeat prior analysis.`,
     );
   }
   return parts.filter(Boolean).join("\n");
