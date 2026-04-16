@@ -30,9 +30,9 @@ function hasClaudeCLI(): boolean {
 
 function hasRTK(): boolean {
   try {
-    const ver = execSync("rtk --version", { stdio: "pipe", timeout: 5000, encoding: "utf-8" });
-    // Only use RTK if it's our version (has 'proxy' command), not the crates.io rtk
-    return ver.includes("0.3") || ver.includes("0.4"); // our RTK is 0.3x+
+    // Verify it's rtk-ai/rtk (has 'rewrite' command), not the crates.io rtk
+    execSync("rtk rewrite echo test", { stdio: "pipe", timeout: 5000 });
+    return true;
   } catch { return false; }
 }
 
@@ -65,11 +65,12 @@ async function callClaudeCLI(
 
   // Claude CLI blocks --dangerously-skip-permissions under root.
   // Drop to 'kai' user if running as root (Docker runner).
+  // RTK hooks are configured in kai user's ~/.claude/settings.json — no wrapper needed.
   const isRoot = process.getuid?.() === 0;
   const claudeArgs = `-p --dangerously-skip-permissions --output-format json --max-turns 10 --model ${modelId}`;
   const cmd = isRoot
-    ? `su -s /bin/bash kai -c 'ANTHROPIC_API_KEY=${apiKey} ${prefix} claude ${claudeArgs}'`
-    : `${prefix} claude ${claudeArgs}`.trim();
+    ? `su -s /bin/bash kai -c 'ANTHROPIC_API_KEY=${apiKey} claude ${claudeArgs}'`
+    : `claude ${claudeArgs}`;
 
   core.info(`Executing: ${rtk ? "rtk → " : ""}claude CLI (${modelId})`);
 

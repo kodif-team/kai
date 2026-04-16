@@ -33399,8 +33399,8 @@ function hasClaudeCLI() {
 }
 function hasRTK() {
   try {
-    const ver = (0, import_node_child_process.execSync)("rtk --version", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" });
-    return ver.includes("0.3") || ver.includes("0.4");
+    (0, import_node_child_process.execSync)("rtk rewrite echo test", { stdio: "pipe", timeout: 5e3 });
+    return true;
   } catch {
     return false;
   }
@@ -33428,7 +33428,7 @@ Be concise and actionable. Use markdown. Reference files and line numbers.`
   ].filter(Boolean).join("\n");
   const isRoot = process.getuid?.() === 0;
   const claudeArgs = `-p --dangerously-skip-permissions --output-format json --max-turns 10 --model ${modelId}`;
-  const cmd = isRoot ? `su -s /bin/bash kai -c 'ANTHROPIC_API_KEY=${apiKey} ${prefix} claude ${claudeArgs}'` : `${prefix} claude ${claudeArgs}`.trim();
+  const cmd = isRoot ? `su -s /bin/bash kai -c 'ANTHROPIC_API_KEY=${apiKey} claude ${claudeArgs}'` : `claude ${claudeArgs}`;
   core.info(`Executing: ${rtk ? "rtk \u2192 " : ""}claude CLI (${modelId})`);
   const output = (0, import_node_child_process.execSync)(cmd, {
     input: prompt,
