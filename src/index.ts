@@ -7,7 +7,7 @@ import { mkdirSync } from "node:fs";
 
 // --- Audit DB (SQLite, persistent via Docker volume) ---
 
-const AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/audit.db";
+const AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/kai-audit.db";
 
 function initAuditDb(): DatabaseSync {
   try { mkdirSync("/home/kai/data", { recursive: true }); } catch { /* */ }

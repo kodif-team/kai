@@ -27582,7 +27582,7 @@ var Octokit2 = Octokit.plugin(requestLog, legacyRestEndpointMethods, paginateRes
 var import_node_child_process = require("node:child_process");
 var import_node_sqlite = require("node:sqlite");
 var import_node_fs = require("node:fs");
-var AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/audit.db";
+var AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/kai-audit.db";
 function initAuditDb() {
   try {
     (0, import_node_fs.mkdirSync)("/home/kai/data", { recursive: true });
