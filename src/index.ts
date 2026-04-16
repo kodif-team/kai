@@ -5,6 +5,7 @@ import { execSync, spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { isMetaQuestion, routeEvent, shouldVerifyCommit, type RouterDecision } from "./router";
+import { templateForRoute } from "./templates";
 
 // --- Audit DB (SQLite, persistent via Docker volume) ---
 
@@ -225,8 +226,6 @@ To explore: kodif-team/architect — .claude/CLAUDE.md, service-summaries/, db-s
 function isArchitectureQuestion(msg: string): boolean {
   return /architect|infra|service|microservice|system|overview|how.*work|database|schema|stack/i.test(msg);
 }
-
-const META_TEMPLATE = `I'm Kai, the Kodif project assistant. My goal is to help with minimal token spend and provide a good experience for Kodif architecture questions. Usage: write a comment with a task for @kai; for deeper analysis add \`use sonnet\` or \`use opus\`; loop mode (under development) is a sandbox where the agent will work with full permissions, autonomously commit and open PRs.`;
 
 function buildFooter(
   modelLabel: string,
@@ -632,9 +631,10 @@ async function run() {
     if (route.decision === "reply-template") {
       const durationSec = Math.round((Date.now() - startTime) / 1000);
       const footer = buildFooter(selectedModel.label, "0.0%", 0, 0, 0, 0, durationSec);
+      const template = templateForRoute(route);
       const { data: metaReply } = await octokit.issues.createComment({
         owner, repo, issue_number: issueNumber,
-        body: `> @${sender}: ${rawMessage}\n\n${META_TEMPLATE}\n\n---\n<sub>${footer}</sub>`,
+        body: `> @${sender}: ${rawMessage}\n\n${template}\n\n---\n<sub>${footer}</sub>`,
       });
       sessionUpdate(auditDb, runId, "completed", { status: "completed", replyCommentId: metaReply.id });
       auditLog(auditDb, { sender, repo: `${owner}/${repo}`, prNumber: issueNumber, model: selectedModel.label, message: rawMessage, durationMs: Date.now() - startTime, costUsd: 0, tokensIn: 0, tokensOut: 0, rtkSavings: "0.0%", status: "completed" });

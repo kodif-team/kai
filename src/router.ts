@@ -16,6 +16,11 @@ export type RouterDecision = {
   commitExpected: boolean;
 };
 
+const OFFTOPIC_PATTERNS = [
+  /\b(weather|recipe|movie|music|song|joke|dating|sports|football|basketball|crypto price|stock price)\b/i,
+  /\b(погода|рецепт|фильм|музыка|песня|шутк|спорт|футбол|баскетбол|крипт|акци[яи])\b/i,
+];
+
 export function isMetaQuestion(msg: string): boolean {
   return /^(who are you|what are you|how to use|help|what can you do|кто ты|как пользоваться)/i.test(msg);
 }
@@ -61,6 +66,10 @@ export function routeEvent(rawMessage: string, modelTier: string): RouterDecisio
 
   if (isMetaQuestion(normalized)) {
     return { ...base("meta-template", "reply-template", "meta question handled by template", 0.99), maxContextTokens: 0 };
+  }
+
+  if (OFFTOPIC_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return { ...base("spam-abuse", "reply-template", "off-topic non-development request", 0.9), maxContextTokens: 0 };
   }
 
   if (/https?:\/\/\S+\s*$/i.test(normalized) && normalized.split(" ").length <= 3) {

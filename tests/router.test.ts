@@ -20,6 +20,13 @@ test("routes meta questions to template", () => {
   assert.equal(route.maxContextTokens, 0);
 });
 
+test("routes off-topic spam to a cheap template response", () => {
+  const route = routeEvent("tell me a joke about football", "haiku");
+  assert.equal(route.intent, "spam-abuse");
+  assert.equal(route.decision, "reply-template");
+  assert.equal(route.maxContextTokens, 0);
+});
+
 test("asks clarification for empty and vague requests", () => {
   assert.equal(routeEvent("", "haiku").decision, "ask-clarification");
   assert.equal(routeEvent("fix", "haiku").intent, "needs-input");

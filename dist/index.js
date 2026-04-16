@@ -27584,6 +27584,10 @@ var import_node_sqlite = require("node:sqlite");
 var import_node_fs = require("node:fs");
 
 // src/router.ts
+var OFFTOPIC_PATTERNS = [
+  /\b(weather|recipe|movie|music|song|joke|dating|sports|football|basketball|crypto price|stock price)\b/i,
+  /\b(погода|рецепт|фильм|музыка|песня|шутк|спорт|футбол|баскетбол|крипт|акци[яи])\b/i
+];
 function isMetaQuestion(msg) {
   return /^(who are you|what are you|how to use|help|what can you do|кто ты|как пользоваться)/i.test(msg);
 }
@@ -27623,6 +27627,9 @@ function routeEvent(rawMessage, modelTier) {
   if (isMetaQuestion(normalized)) {
     return { ...base("meta-template", "reply-template", "meta question handled by template", 0.99), maxContextTokens: 0 };
   }
+  if (OFFTOPIC_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return { ...base("spam-abuse", "reply-template", "off-topic non-development request", 0.9), maxContextTokens: 0 };
+  }
   if (/https?:\/\/\S+\s*$/i.test(normalized) && normalized.split(" ").length <= 3) {
     return { ...base("needs-input", "ask-clarification", "link-only request needs task", 0.9), maxContextTokens: 0 };
   }
@@ -27657,6 +27664,13 @@ function routeEvent(rawMessage, modelTier) {
     estimatedCostUsd: modelTier === "haiku" ? 0.01 : modelTier === "sonnet" ? 0.06 : 0.25,
     maxContextTokens: 15e3
   };
+}
+
+// src/templates.ts
+var META_TEMPLATE2 = `I'm Kai, the Kodif project assistant. My goal is to help with minimal token spend and provide a good experience for Kodif architecture questions. Usage: write a comment with a task for @kai; for deeper analysis add \`use sonnet\` or \`use opus\`; loop mode (under development) is a sandbox where the agent will work with full permissions, autonomously commit and open PRs.`;
+var OFFTOPIC_TEMPLATE = `Kai only handles development work related to our platform: code review, bug fixes, tests, PRs, architecture, deployments, logs, metrics, and engineering tasks. Please ask a work-related development question or provide a specific repo/PR/task.`;
+function templateForRoute(route) {
+  return route.intent === "spam-abuse" ? OFFTOPIC_TEMPLATE : META_TEMPLATE2;
 }
 
 // src/index.ts
@@ -27875,7 +27889,6 @@ To explore: kodif-team/architect \u2014 .claude/CLAUDE.md, service-summaries/, d
 function isArchitectureQuestion(msg) {
   return /architect|infra|service|microservice|system|overview|how.*work|database|schema|stack/i.test(msg);
 }
-var META_TEMPLATE = `I'm Kai, the Kodif project assistant. My goal is to help with minimal token spend and provide a good experience for Kodif architecture questions. Usage: write a comment with a task for @kai; for deeper analysis add \`use sonnet\` or \`use opus\`; loop mode (under development) is a sandbox where the agent will work with full permissions, autonomously commit and open PRs.`;
 function buildFooter(modelLabel, rtkSavings, inputTokens, outputTokens, costUsd, numTurns, durationSec, cacheReadTokens = 0) {
   const inK = Math.round(inputTokens / 1e3);
   const outK = Math.round(outputTokens / 1e3);
@@ -28248,13 +28261,14 @@ I need a specific target and expected outcome before spending model tokens. Plea
     if (route.decision === "reply-template") {
       const durationSec = Math.round((Date.now() - startTime) / 1e3);
       const footer2 = buildFooter(selectedModel.label, "0.0%", 0, 0, 0, 0, durationSec);
+      const template = templateForRoute(route);
       const { data: metaReply } = await octokit.issues.createComment({
         owner,
         repo,
         issue_number: issueNumber,
         body: `> @${sender}: ${rawMessage}
 
-${META_TEMPLATE}
+${template}
 
 ---
 <sub>${footer2}</sub>`
