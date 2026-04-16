@@ -210,7 +210,8 @@ function buildCLIPrompt(
     );
   } else {
     parts.push(
-      `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
+      `Repo checked out. Use git diff origin/main...HEAD and Read to inspect PROJECT code only.`,
+      `IGNORE: .github/, .claude/, CLAUDE.md, *.yml workflow files — these are infrastructure, not project code.`,
       `Task: ${userMessage}`,
       `Rules: concise, markdown, file:line refs, max 50 lines. Don't repeat prior analysis.`,
     );
@@ -505,6 +506,13 @@ async function run() {
     } else {
       sessionUpdate(auditDb, runId, "cli-starting");
       await safeUpdate(octokit, owner, repo, replyCommentId, spinnerFrame(2, 5, selectedModel.label));
+
+      // Hide infrastructure files from Claude — bot should only see project code
+      try {
+        execSync(`echo '.github/\n.claude/\nCLAUDE.md\n*.yml\n*.yaml' > .claudeignore`, {
+          stdio: "pipe", timeout: 5000,
+        });
+      } catch { /* non-critical */ }
 
       const prompt = buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext);
       const maxTurns = getMaxTurns(userMessage, modelTier);

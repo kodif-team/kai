@@ -27780,7 +27780,8 @@ ${prCommentsContext}`);
     );
   } else {
     parts.push(
-      `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
+      `Repo checked out. Use git diff origin/main...HEAD and Read to inspect PROJECT code only.`,
+      `IGNORE: .github/, .claude/, CLAUDE.md, *.yml workflow files \u2014 these are infrastructure, not project code.`,
       `Task: ${userMessage}`,
       `Rules: concise, markdown, file:line refs, max 50 lines. Don't repeat prior analysis.`
     );
@@ -28034,6 +28035,17 @@ ${filesList}`;
     } else {
       sessionUpdate(auditDb, runId, "cli-starting");
       await safeUpdate(octokit, owner, repo, replyCommentId, spinnerFrame(2, 5, selectedModel.label));
+      try {
+        (0, import_node_child_process.execSync)(`echo '.github/
+.claude/
+CLAUDE.md
+*.yml
+*.yaml' > .claudeignore`, {
+          stdio: "pipe",
+          timeout: 5e3
+        });
+      } catch {
+      }
       const prompt = buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext);
       const maxTurns = getMaxTurns(userMessage, modelTier);
       core.info(`Max turns: ${maxTurns} (task: "${userMessage.slice(0, 40)}")`);
