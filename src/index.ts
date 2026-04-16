@@ -487,6 +487,13 @@ async function run() {
       prBody = pr.body ?? "";
 
       try {
+        // Configure git for push (bot identity + token auth)
+        execSync(`git config user.name "kodif-ai[bot]" && git config user.email "kodif-ai[bot]@users.noreply.github.com"`, {
+          stdio: "pipe", timeout: 5000,
+        });
+        execSync(`git remote set-url origin https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`, {
+          stdio: "pipe", timeout: 5000,
+        });
         execSync(`git fetch origin ${pr.head.ref} && git checkout ${pr.head.ref}`, {
           stdio: "pipe", timeout: 30_000, encoding: "utf-8",
         });

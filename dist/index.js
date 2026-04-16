@@ -28017,6 +28017,14 @@ async function run() {
       prTitle = pr.title;
       prBody = pr.body ?? "";
       try {
+        (0, import_node_child_process.execSync)(`git config user.name "kodif-ai[bot]" && git config user.email "kodif-ai[bot]@users.noreply.github.com"`, {
+          stdio: "pipe",
+          timeout: 5e3
+        });
+        (0, import_node_child_process.execSync)(`git remote set-url origin https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`, {
+          stdio: "pipe",
+          timeout: 5e3
+        });
         (0, import_node_child_process.execSync)(`git fetch origin ${pr.head.ref} && git checkout ${pr.head.ref}`, {
           stdio: "pipe",
           timeout: 3e4,
