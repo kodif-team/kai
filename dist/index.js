@@ -28040,7 +28040,9 @@ ${filesList}`;
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "\u2014 %";
       const durationSec = Math.round(durationMs / 1e3);
-      footer = `Kai (Kodif AI) | **${selectedModel.label}** | [RTK](https://github.com/rtk-ai/rtk) saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) \xB7 ${durationSec}s | use sonnet or use opus for deeper analysis`;
+      const inK = Math.round(r.inputTokens / 1e3);
+      const outK = Math.round(r.outputTokens / 1e3);
+      footer = `Kai \xB7 ${selectedModel.label} \xB7 [RTK](https://github.com/rtk-ai/rtk) ${rtkPct} \xB7 ${inK}K in / ${outK}K out \xB7 $${r.costUsd.toFixed(2)} \xB7 ${r.numTurns}t \xB7 ${durationSec}s`;
       auditLog(auditDb, {
         sender,
         repo: `${owner}/${repo}`,

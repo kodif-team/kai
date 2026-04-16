@@ -490,7 +490,9 @@ async function run() {
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "— %";
       const durationSec = Math.round(durationMs / 1000);
-      footer = `Kai (Kodif AI) | **${selectedModel.label}** | [RTK](https://github.com/rtk-ai/rtk) saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) · ${durationSec}s | use sonnet or use opus for deeper analysis`;
+      const inK = Math.round(r.inputTokens / 1000);
+      const outK = Math.round(r.outputTokens / 1000);
+      footer = `Kai · ${selectedModel.label} · [RTK](https://github.com/rtk-ai/rtk) ${rtkPct} · ${inK}K in / ${outK}K out · $${r.costUsd.toFixed(2)} · ${r.numTurns}t · ${durationSec}s`;
 
       auditLog(auditDb, {
         sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
