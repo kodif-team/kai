@@ -264,7 +264,7 @@ async function run() {
 
             const totalTokens = r.inputTokens + r.outputTokens;
             const rtkPct = r.rtk && r.rtkSavings ? r.rtkSavings : "— %";
-            footer = `Kai (Kodif AI) | RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+            footer = `RTK saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} · ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
           } catch (cliErr: unknown) {
             core.warning(`CLI failed, falling back to API: ${cliErr instanceof Error ? cliErr.message.slice(0, 100) : cliErr}`);
           }
@@ -273,7 +273,7 @@ async function run() {
           const r = await callClaudeAPI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
           const total = r.inputTokens + r.outputTokens;
           result = r.text;
-          footer = `Kai (Kodif AI) | RTK saves — % | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${total.toLocaleString()} total) | use sonnet or use opus for deeper analysis`;
+          footer = `RTK saves — % | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${total.toLocaleString()} total) | use sonnet or use opus for deeper analysis`;
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -289,7 +289,7 @@ async function run() {
     }
 
     await safeUpdate(octokit, owner, repo, reply.id,
-      `> @${sender}: ${rawMessage}\n\n${result}\n\n---\n${footer}`);
+      `> @${sender}: ${rawMessage}\n\n${result}\n\n---\n<sub>${footer}</sub>`);
 
     core.info("Done");
   } catch (error) {
