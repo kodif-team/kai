@@ -27699,18 +27699,17 @@ async function getPRCommentsContext(octokit, owner, repo, issueNumber) {
       owner,
       repo,
       issue_number: issueNumber,
-      per_page: 50
+      per_page: 30
     });
-    const recent = comments.slice(-20);
+    const recent = comments.slice(-5);
+    if (recent.length === 0) return "";
     return recent.map((c) => {
-      const who = c.user?.login ?? "unknown";
-      const isBot = who.includes("[bot]");
-      const prefix = isBot ? "[kai-response]" : `[@${who}]`;
-      const body = (c.body ?? "").slice(0, 500);
-      return `${prefix}: ${body}`;
-    }).join("\n\n---\n\n");
+      const who = c.user?.login ?? "?";
+      const body = (c.body ?? "").slice(0, 200).replace(/\n/g, " ");
+      return `${who}: ${body}`;
+    }).join("\n");
   } catch {
-    return "(could not load PR comments)";
+    return "";
   }
 }
 var MODELS = {
@@ -27751,27 +27750,28 @@ function requireRTK() {
   }
 }
 function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext) {
-  return [
-    `You are Kai \u2014 the Kodif AI engineering agent.`,
-    `PR: "${prTitle}"`,
-    prBody ? `Description: ${prBody}` : "",
-    `
-Changed files:
-${filesList}`,
-    prCommentsContext ? `
---- Previous PR conversation (for context) ---
-${prCommentsContext}
---- End of conversation ---` : "",
-    `
-The repo is checked out. Use Bash and Read tools to inspect the code.`,
-    `Run: git diff origin/main...HEAD to see changes.`,
-    `Run: git log --oneline -5 for recent commits.`,
-    `Then: ${userMessage}`,
-    `
-Be concise and actionable. Use markdown. Reference files and line numbers.`,
-    `
-Do NOT repeat analysis already given in previous Kai comments above \u2014 focus on the new request.`
-  ].filter(Boolean).join("\n");
+  const parts = [
+    `Kai, AI code reviewer. PR: "${prTitle}"`,
+    prBody ? `Desc: ${prBody.slice(0, 300)}` : "",
+    `Files:
+${filesList}`
+  ];
+  if (prCommentsContext) {
+    parts.push(`Prior conversation:
+${prCommentsContext}`);
+  }
+  parts.push(
+    `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
+    `Task: ${userMessage}`,
+    `Rules: concise, markdown, file:line refs, max 50 lines. Don't repeat prior analysis.`
+  );
+  return parts.filter(Boolean).join("\n");
+}
+function getMaxTurns(message, modelTier) {
+  if (modelTier === "opus") return 20;
+  if (modelTier === "sonnet") return 15;
+  const simple = /^(top|list|one-liner|quick|is this|what|summarize)/i.test(message);
+  return simple ? 5 : 10;
 }
 var HEARTBEAT_INTERVAL_MS = 15e3;
 var CLI_TIMEOUT_MS = 3e5;
@@ -27792,7 +27792,7 @@ function spinnerFrame(_tick, elapsed, _modelLabel) {
 
 _Delete this comment to cancel._`;
 }
-async function callClaudeCLIWithHeartbeat(apiKey, modelId, prompt, heartbeat, db, runId) {
+async function callClaudeCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, heartbeat, db, runId) {
   const isRoot = process.getuid?.() === 0;
   for (let attempt = 1; attempt <= MAX_CLI_RETRIES; attempt++) {
     sessionUpdate(db, runId, `cli-attempt-${attempt}`, { attempt });
@@ -27814,7 +27814,7 @@ _Delete this comment to cancel._`
       await new Promise((r) => setTimeout(r, delay));
     }
     try {
-      const result = await runCLIWithHeartbeat(apiKey, modelId, prompt, isRoot, heartbeat, db, runId);
+      const result = await runCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, isRoot, heartbeat, db, runId);
       sessionUpdate(db, runId, "completed", { status: "completed" });
       return result;
     } catch (e) {
@@ -27829,9 +27829,9 @@ _Delete this comment to cancel._`
   }
   throw new Error("All CLI retries exhausted");
 }
-function runCLIWithHeartbeat(apiKey, modelId, prompt, isRoot, hb, db, runId) {
+function runCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, isRoot, hb, db, runId) {
   return new Promise((resolve, reject) => {
-    const claudeArgs = ["-p", "--dangerously-skip-permissions", "--output-format", "json", "--max-turns", "15", "--model", modelId];
+    const claudeArgs = ["-p", "--dangerously-skip-permissions", "--output-format", "json", "--max-turns", String(maxTurns), "--model", modelId];
     const startTime = Date.now();
     let output = "";
     let settled = false;
@@ -27997,7 +27997,7 @@ async function run() {
         core.warning(`Could not checkout PR branch: ${e instanceof Error ? e.message.slice(0, 100) : e}`);
       }
       const { data: files } = await octokit.pulls.listFiles({ owner, repo, pull_number: issueNumber, per_page: 100 });
-      filesList = files.map((f) => `- ${f.filename} (+${f.additions}/-${f.deletions}) [${f.status}]`).join("\n");
+      filesList = files.map((f) => `${f.filename} +${f.additions}/-${f.deletions}`).join("\n");
       prCommentsContext = await getPRCommentsContext(octokit, owner, repo, issueNumber);
       sessionUpdate(auditDb, runId, "context-loaded");
     } catch (e) {
@@ -28014,6 +28014,8 @@ ${filesList}`;
     } else {
       sessionUpdate(auditDb, runId, "cli-starting");
       const prompt = buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext);
+      const maxTurns = getMaxTurns(userMessage, modelTier);
+      core.info(`Max turns: ${maxTurns} (task: "${userMessage.slice(0, 40)}")`);
       const heartbeatCtx = {
         octokit,
         owner,
@@ -28026,6 +28028,7 @@ ${filesList}`;
         anthropicApiKey,
         selectedModel.id,
         prompt,
+        maxTurns,
         heartbeatCtx,
         auditDb,
         runId

@@ -103,20 +103,18 @@ async function getPRCommentsContext(
 ): Promise<string> {
   try {
     const { data: comments } = await octokit.issues.listComments({
-      owner, repo, issue_number: issueNumber, per_page: 50,
+      owner, repo, issue_number: issueNumber, per_page: 30,
     });
-    // Format last 20 comments for context
-    const recent = comments.slice(-20);
+    // Only last 5 comments, 200 chars max — minimize context tokens
+    const recent = comments.slice(-5);
+    if (recent.length === 0) return "";
     return recent.map(c => {
-      const who = c.user?.login ?? "unknown";
-      const isBot = who.includes("[bot]");
-      const prefix = isBot ? "[kai-response]" : `[@${who}]`;
-      // Truncate long comments
-      const body = (c.body ?? "").slice(0, 500);
-      return `${prefix}: ${body}`;
-    }).join("\n\n---\n\n");
+      const who = c.user?.login ?? "?";
+      const body = (c.body ?? "").slice(0, 200).replace(/\n/g, " ");
+      return `${who}: ${body}`;
+    }).join("\n");
   } catch {
-    return "(could not load PR comments)";
+    return "";
   }
 }
 
@@ -180,19 +178,30 @@ function buildCLIPrompt(
   userMessage: string, prTitle: string, prBody: string,
   filesList: string, prCommentsContext: string,
 ): string {
-  return [
-    `You are Kai — the Kodif AI engineering agent.`,
-    `PR: "${prTitle}"`,
-    prBody ? `Description: ${prBody}` : "",
-    `\nChanged files:\n${filesList}`,
-    prCommentsContext ? `\n--- Previous PR conversation (for context) ---\n${prCommentsContext}\n--- End of conversation ---` : "",
-    `\nThe repo is checked out. Use Bash and Read tools to inspect the code.`,
-    `Run: git diff origin/main...HEAD to see changes.`,
-    `Run: git log --oneline -5 for recent commits.`,
-    `Then: ${userMessage}`,
-    `\nBe concise and actionable. Use markdown. Reference files and line numbers.`,
-    `\nDo NOT repeat analysis already given in previous Kai comments above — focus on the new request.`,
-  ].filter(Boolean).join("\n");
+  // Minimal prompt — every token counts
+  const parts = [
+    `Kai, AI code reviewer. PR: "${prTitle}"`,
+    prBody ? `Desc: ${prBody.slice(0, 300)}` : "",
+    `Files:\n${filesList}`,
+  ];
+  if (prCommentsContext) {
+    parts.push(`Prior conversation:\n${prCommentsContext}`);
+  }
+  parts.push(
+    `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
+    `Task: ${userMessage}`,
+    `Rules: concise, markdown, file:line refs, max 50 lines. Don't repeat prior analysis.`,
+  );
+  return parts.filter(Boolean).join("\n");
+}
+
+// Smart max_turns based on task complexity
+function getMaxTurns(message: string, modelTier: string): number {
+  if (modelTier === "opus") return 20;
+  if (modelTier === "sonnet") return 15;
+  // Haiku: simple tasks get fewer turns
+  const simple = /^(top|list|one-liner|quick|is this|what|summarize)/i.test(message);
+  return simple ? 5 : 10;
 }
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -222,7 +231,7 @@ interface HeartbeatContext {
 }
 
 async function callClaudeCLIWithHeartbeat(
-  apiKey: string, modelId: string, prompt: string,
+  apiKey: string, modelId: string, prompt: string, maxTurns: number,
   heartbeat: HeartbeatContext,
   db: DatabaseSync, runId: string,
 ): Promise<CLIResult> {
@@ -240,7 +249,7 @@ async function callClaudeCLIWithHeartbeat(
     }
 
     try {
-      const result = await runCLIWithHeartbeat(apiKey, modelId, prompt, isRoot, heartbeat, db, runId);
+      const result = await runCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, isRoot, heartbeat, db, runId);
       sessionUpdate(db, runId, "completed", { status: "completed" });
       return result;
     } catch (e: unknown) {
@@ -258,11 +267,11 @@ async function callClaudeCLIWithHeartbeat(
 }
 
 function runCLIWithHeartbeat(
-  apiKey: string, modelId: string, prompt: string, isRoot: boolean,
+  apiKey: string, modelId: string, prompt: string, maxTurns: number, isRoot: boolean,
   hb: HeartbeatContext, db: DatabaseSync, runId: string,
 ): Promise<CLIResult> {
   return new Promise((resolve, reject) => {
-    const claudeArgs = ["-p", "--dangerously-skip-permissions", "--output-format", "json", "--max-turns", "15", "--model", modelId];
+    const claudeArgs = ["-p", "--dangerously-skip-permissions", "--output-format", "json", "--max-turns", String(maxTurns), "--model", modelId];
     const startTime = Date.now();
     let output = "";
     let settled = false; // guard against double resolve/reject
@@ -453,8 +462,9 @@ async function run() {
       }
 
       const { data: files } = await octokit.pulls.listFiles({ owner, repo, pull_number: issueNumber, per_page: 100 });
-      filesList = files.map((f: { filename: string; additions: number; deletions: number; status: string }) =>
-        `- ${f.filename} (+${f.additions}/-${f.deletions}) [${f.status}]`).join("\n");
+      // Compact: "file.py +67/-0" instead of "- file.py (+67/-0) [added]"
+      filesList = files.map((f: { filename: string; additions: number; deletions: number }) =>
+        `${f.filename} +${f.additions}/-${f.deletions}`).join("\n");
 
       prCommentsContext = await getPRCommentsContext(octokit, owner, repo, issueNumber);
       sessionUpdate(auditDb, runId, "context-loaded");
@@ -473,12 +483,14 @@ async function run() {
       sessionUpdate(auditDb, runId, "cli-starting");
 
       const prompt = buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext);
+      const maxTurns = getMaxTurns(userMessage, modelTier);
+      core.info(`Max turns: ${maxTurns} (task: "${userMessage.slice(0, 40)}")`);
       const heartbeatCtx: HeartbeatContext = {
         octokit, owner, repo, replyCommentId, sender, modelLabel: selectedModel.label,
       };
 
       const r = await callClaudeCLIWithHeartbeat(
-        anthropicApiKey, selectedModel.id, prompt, heartbeatCtx, auditDb, runId);
+        anthropicApiKey, selectedModel.id, prompt, maxTurns, heartbeatCtx, auditDb, runId);
       result = r.text;
 
       const durationMs = Date.now() - startTime;
