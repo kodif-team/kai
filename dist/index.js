@@ -27772,14 +27772,19 @@ ${filesList}`
 ${prCommentsContext}`);
   }
   if (isArchitectureQuestion(userMessage)) {
-    parts.push(`Kodif architecture context:
-${KODIF_ARCH_CONTEXT}`);
+    parts.push(
+      `IMPORTANT: The user is asking about Kodif platform architecture. Answer using this context, NOT the PR code:`,
+      KODIF_ARCH_CONTEXT,
+      `Task: ${userMessage}`,
+      `Rules: concise, markdown, max 50 lines. Focus on architecture, services, and how they connect.`
+    );
+  } else {
+    parts.push(
+      `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
+      `Task: ${userMessage}`,
+      `Rules: concise, markdown, file:line refs, max 50 lines. Don't repeat prior analysis.`
+    );
   }
-  parts.push(
-    `Repo checked out. Use git diff origin/main...HEAD and Read to inspect.`,
-    `Task: ${userMessage}`,
-    `Rules: concise, markdown, file:line refs, max 50 lines. Don't repeat prior analysis.`
-  );
   return parts.filter(Boolean).join("\n");
 }
 function getMaxTurns(message, modelTier) {
