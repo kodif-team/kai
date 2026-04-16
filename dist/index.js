@@ -31788,6 +31788,7 @@ async function run() {
       return;
     }
     core.info(`Triggered by @${sender} in #${issueNumber}`);
+    core.info(`App ID provided: ${appId ? "yes" : "no"}, Private key provided: ${appPrivateKey ? "yes (" + appPrivateKey.length + " chars)" : "no"}`);
     let octokit;
     if (appId && appPrivateKey) {
       const installationId = await getInstallationId(

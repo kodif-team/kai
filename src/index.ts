@@ -43,6 +43,7 @@ async function run() {
     }
 
     core.info(`Triggered by @${sender} in #${issueNumber}`);
+    core.info(`App ID provided: ${appId ? "yes" : "no"}, Private key provided: ${appPrivateKey ? "yes (" + appPrivateKey.length + " chars)" : "no"}`);
 
     // Create authenticated Octokit
     let octokit: Octokit;
