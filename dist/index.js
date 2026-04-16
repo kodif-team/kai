@@ -27605,9 +27605,70 @@ function initAuditDb() {
       rtk_savings TEXT,
       status TEXT DEFAULT 'started',
       error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT UNIQUE NOT NULL,
+      repo TEXT NOT NULL,
+      pr_number INTEGER NOT NULL,
+      sender TEXT NOT NULL,
+      comment_id INTEGER NOT NULL,
+      reply_comment_id INTEGER,
+      model TEXT NOT NULL,
+      phase TEXT DEFAULT 'init',
+      attempt INTEGER DEFAULT 1,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_heartbeat TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT,
+      status TEXT DEFAULT 'running',
+      error TEXT
     )
   `);
   return db;
+}
+function sessionStart(db, data) {
+  try {
+    db.prepare(`INSERT OR REPLACE INTO sessions (run_id, repo, pr_number, sender, comment_id, model, status, phase)
+      VALUES (?, ?, ?, ?, ?, ?, 'running', 'init')`).run(
+      data.runId,
+      data.repo,
+      data.prNumber,
+      data.sender,
+      data.commentId,
+      data.model
+    );
+  } catch (e) {
+    core.warning(`Session start failed: ${e}`);
+  }
+}
+function sessionUpdate(db, runId, phase, extra) {
+  try {
+    const sets = [`phase = ?`, `last_heartbeat = datetime('now')`];
+    const params = [phase];
+    if (extra?.replyCommentId) {
+      sets.push(`reply_comment_id = ?`);
+      params.push(extra.replyCommentId);
+    }
+    if (extra?.attempt) {
+      sets.push(`attempt = ?`);
+      params.push(extra.attempt);
+    }
+    if (extra?.status) {
+      sets.push(`status = ?`);
+      params.push(extra.status);
+    }
+    if (extra?.error) {
+      sets.push(`error = ?`);
+      params.push(extra.error);
+    }
+    if (extra?.status === "completed" || extra?.status === "failed") {
+      sets.push(`finished_at = datetime('now')`);
+    }
+    params.push(runId);
+    db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE run_id = ?`).run(...params);
+  } catch (e) {
+    core.warning(`Session update failed: ${e}`);
+  }
 }
 function auditLog(db, data) {
   try {
@@ -27689,8 +27750,8 @@ function requireRTK() {
     throw new Error(`RTK is required but not available: ${msg}`);
   }
 }
-async function callClaudeCLI(apiKey, modelId, userMessage, prTitle, prBody, filesList, prCommentsContext) {
-  const prompt = [
+function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext) {
+  return [
     `You are Kai \u2014 the Kodif AI engineering agent.`,
     `PR: "${prTitle}"`,
     prBody ? `Description: ${prBody}` : "",
@@ -27711,39 +27772,135 @@ Be concise and actionable. Use markdown. Reference files and line numbers.`,
     `
 Do NOT repeat analysis already given in previous Kai comments above \u2014 focus on the new request.`
   ].filter(Boolean).join("\n");
+}
+var HEARTBEAT_INTERVAL_MS = 15e3;
+var CLI_TIMEOUT_MS = 3e5;
+var MAX_CLI_RETRIES = 3;
+var RETRY_DELAYS = [15e3, 3e4, 6e4];
+async function callClaudeCLIWithHeartbeat(apiKey, modelId, prompt, heartbeat, db, runId) {
   const isRoot = process.getuid?.() === 0;
-  const claudeArgs = `-p --dangerously-skip-permissions --output-format json --max-turns 15 --model ${modelId}`;
-  const cmd = isRoot ? `su -s /bin/bash kai -c 'ANTHROPIC_API_KEY=${apiKey} claude ${claudeArgs}'` : `claude ${claudeArgs}`;
-  core.info(`Executing: claude CLI (${modelId})`);
-  const output = (0, import_node_child_process.execSync)(cmd, {
-    input: prompt,
-    env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 3e5,
-    encoding: "utf-8"
-  });
-  const json = JSON.parse(output);
-  let rtkSavings = "";
-  try {
-    const gainCmd = isRoot ? `su -s /bin/bash kai -c 'rtk gain --json 2>/dev/null || rtk gain 2>/dev/null'` : `rtk gain --json 2>/dev/null || rtk gain 2>/dev/null`;
-    const raw = (0, import_node_child_process.execSync)(gainCmd, { encoding: "utf-8", timeout: 5e3 }).trim();
-    try {
-      const g = JSON.parse(raw);
-      rtkSavings = g.savings_percent ?? g.percent ?? "";
-    } catch {
-      const m = raw.match(/(\d+(?:\.\d+)?)\s*%/);
-      rtkSavings = m ? m[1] + "%" : raw;
+  for (let attempt = 1; attempt <= MAX_CLI_RETRIES; attempt++) {
+    sessionUpdate(db, runId, `cli-attempt-${attempt}`, { attempt });
+    if (attempt > 1) {
+      const delay = RETRY_DELAYS[attempt - 2] ?? 6e4;
+      core.info(`Retry ${attempt}/${MAX_CLI_RETRIES} in ${delay / 1e3}s`);
+      await safeUpdate(
+        heartbeat.octokit,
+        heartbeat.owner,
+        heartbeat.repo,
+        heartbeat.replyCommentId,
+        `> \u26A0\uFE0F Retrying (attempt ${attempt}/${MAX_CLI_RETRIES})...
+
+\u{1F504} Previous attempt failed, waiting ${delay / 1e3}s before retry
+\u{1F50D} **${heartbeat.modelLabel}**
+
+_Delete this comment to cancel._`
+      );
+      await new Promise((r) => setTimeout(r, delay));
     }
-  } catch {
+    try {
+      const result = await runCLIWithHeartbeat(apiKey, modelId, prompt, isRoot, heartbeat, db, runId);
+      sessionUpdate(db, runId, "completed", { status: "completed" });
+      return result;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      core.warning(`CLI attempt ${attempt} failed: ${msg}`);
+      sessionUpdate(db, runId, `failed-attempt-${attempt}`, { error: msg });
+      if (attempt === MAX_CLI_RETRIES) {
+        sessionUpdate(db, runId, "failed", { status: "failed", error: msg });
+        throw e;
+      }
+    }
   }
-  return {
-    text: json.result ?? json.content ?? output,
-    costUsd: json.total_cost_usd ?? json.cost_usd ?? 0,
-    numTurns: json.num_turns ?? 1,
-    inputTokens: (json.usage?.input_tokens ?? 0) + (json.usage?.cache_read_input_tokens ?? 0) + (json.usage?.cache_creation_input_tokens ?? 0),
-    outputTokens: json.usage?.output_tokens ?? 0,
-    rtkSavings
-  };
+  throw new Error("All CLI retries exhausted");
+}
+function runCLIWithHeartbeat(apiKey, modelId, prompt, isRoot, hb, db, runId) {
+  return new Promise((resolve, reject) => {
+    const claudeArgs = ["-p", "--dangerously-skip-permissions", "--output-format", "json", "--max-turns", "15", "--model", modelId];
+    const startTime = Date.now();
+    let output = "";
+    core.info(`Executing: claude CLI (${modelId})`);
+    let child;
+    if (isRoot) {
+      child = (0, import_node_child_process.spawn)("su", ["-s", "/bin/bash", "kai", "-c", `ANTHROPIC_API_KEY=${apiKey} claude ${claudeArgs.join(" ")}`], {
+        env: { ...process.env, ANTHROPIC_API_KEY: apiKey }
+      });
+    } else {
+      child = (0, import_node_child_process.spawn)("claude", claudeArgs, {
+        env: { ...process.env, ANTHROPIC_API_KEY: apiKey }
+      });
+    }
+    child.stdin?.write(prompt);
+    child.stdin?.end();
+    child.stdout?.on("data", (data) => {
+      output += data.toString();
+    });
+    child.stderr?.on("data", (data) => {
+      core.info(`CLI stderr: ${data.toString().slice(0, 200)}`);
+    });
+    const heartbeatTimer = setInterval(async () => {
+      const elapsed = Math.round((Date.now() - startTime) / 1e3);
+      sessionUpdate(db, runId, "running");
+      const exists = await commentExists(hb.octokit, hb.owner, hb.repo, hb.replyCommentId);
+      if (!exists) {
+        core.info("Comment deleted \u2014 killing CLI");
+        child.kill("SIGTERM");
+        clearInterval(heartbeatTimer);
+        reject(new Error("Cancelled by user"));
+        return;
+      }
+      await safeUpdate(
+        hb.octokit,
+        hb.owner,
+        hb.repo,
+        hb.replyCommentId,
+        `> \u23F3 Working... (${elapsed}s elapsed)
+
+\u{1F50D} Analyzing with **${hb.modelLabel}**...
+\u2699\uFE0F CLI + RTK
+
+_Delete this comment to cancel._`
+      );
+    }, HEARTBEAT_INTERVAL_MS);
+    const timeoutTimer = setTimeout(() => {
+      core.warning(`CLI timeout after ${CLI_TIMEOUT_MS / 1e3}s`);
+      child.kill("SIGTERM");
+    }, CLI_TIMEOUT_MS);
+    child.on("close", (code) => {
+      clearInterval(heartbeatTimer);
+      clearTimeout(timeoutTimer);
+      if (code !== 0 && !output) {
+        reject(new Error(`CLI exited with code ${code}`));
+        return;
+      }
+      try {
+        const json = JSON.parse(output);
+        let rtkSavings = "";
+        try {
+          const gainCmd = isRoot ? `su -s /bin/bash kai -c 'rtk gain --json 2>/dev/null || rtk gain 2>/dev/null'` : `rtk gain --json 2>/dev/null || rtk gain 2>/dev/null`;
+          const raw = (0, import_node_child_process.execSync)(gainCmd, { encoding: "utf-8", timeout: 5e3 }).trim();
+          try {
+            const g = JSON.parse(raw);
+            rtkSavings = g.savings_percent ?? g.percent ?? "";
+          } catch {
+            const m = raw.match(/(\d+(?:\.\d+)?)\s*%/);
+            rtkSavings = m ? m[1] + "%" : raw;
+          }
+        } catch {
+        }
+        resolve({
+          text: json.result ?? json.content ?? output,
+          costUsd: json.total_cost_usd ?? json.cost_usd ?? 0,
+          numTurns: json.num_turns ?? 1,
+          inputTokens: (json.usage?.input_tokens ?? 0) + (json.usage?.cache_read_input_tokens ?? 0) + (json.usage?.cache_creation_input_tokens ?? 0),
+          outputTokens: json.usage?.output_tokens ?? 0,
+          rtkSavings
+        });
+      } catch (e) {
+        reject(new Error(`Failed to parse CLI output: ${e.message}`));
+      }
+    });
+  });
 }
 async function run() {
   let octokit = null;
@@ -27781,6 +27938,7 @@ async function run() {
     const modeLabel = "CLI + RTK";
     core.info(`Mode: ${modeLabel} | Model: ${selectedModel.label} | RTK: ${rtkVersion}`);
     const auditDb = initAuditDb();
+    const runId = `${owner}/${repo}#${issueNumber}-${Date.now()}`;
     const startTime = Date.now();
     auditLog(auditDb, {
       sender,
@@ -27789,6 +27947,14 @@ async function run() {
       model: selectedModel.label,
       message: rawMessage,
       status: "started"
+    });
+    sessionStart(auditDb, {
+      runId,
+      repo: `${owner}/${repo}`,
+      prNumber: issueNumber,
+      sender,
+      commentId,
+      model: selectedModel.label
     });
     const { data: reply } = await octokit.issues.createComment({
       owner,
@@ -27801,6 +27967,7 @@ async function run() {
 _Delete this comment to cancel._`
     });
     replyCommentId = reply.id;
+    sessionUpdate(auditDb, runId, "working-comment", { replyCommentId });
     let prTitle = "", prBody = "", filesList = "", prCommentsContext = "";
     try {
       await safeUpdate(
@@ -27811,10 +27978,11 @@ _Delete this comment to cancel._`
         `> @${sender} \u2014 got it
 
 \u{1F4D6} Reading PR...
-\u{1F4AC} Loading conversation context... _(${selectedModel.label}, ${modeLabel})_
+\u{1F4AC} Loading conversation context...
 
 _Delete this comment to cancel._`
       );
+      sessionUpdate(auditDb, runId, "loading-context");
       const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: issueNumber });
       prTitle = pr.title;
       prBody = pr.body ?? "";
@@ -27831,6 +27999,7 @@ _Delete this comment to cancel._`
       const { data: files } = await octokit.pulls.listFiles({ owner, repo, pull_number: issueNumber, per_page: 100 });
       filesList = files.map((f) => `- ${f.filename} (+${f.additions}/-${f.deletions}) [${f.status}]`).join("\n");
       prCommentsContext = await getPRCommentsContext(octokit, owner, repo, issueNumber);
+      sessionUpdate(auditDb, runId, "context-loaded");
     } catch (e) {
       core.warning(`PR context error: ${e instanceof Error ? e.message : e}`);
     }
@@ -27843,26 +28012,30 @@ Files:
 ${filesList}`;
       footer = `_Add \`ANTHROPIC_API_KEY\` for AI analysis._`;
     } else {
-      await safeUpdate(
+      sessionUpdate(auditDb, runId, "cli-starting");
+      const prompt = buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext);
+      const heartbeatCtx = {
         octokit,
         owner,
         repo,
         replyCommentId,
-        `> @${sender} \u2014 got it
-
-\u{1F4D6} Reading PR...
-\u{1F4AC} Loaded conversation context
-\u{1F50D} Analyzing with **${selectedModel.label}**...
-\u2699\uFE0F ${modeLabel}
-
-_Delete this comment to cancel._`
+        sender,
+        modelLabel: selectedModel.label
+      };
+      const r = await callClaudeCLIWithHeartbeat(
+        anthropicApiKey,
+        selectedModel.id,
+        prompt,
+        heartbeatCtx,
+        auditDb,
+        runId
       );
-      const r = await callClaudeCLI(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prCommentsContext);
       result = r.text;
       const durationMs = Date.now() - startTime;
       const totalTokens = r.inputTokens + r.outputTokens;
       const rtkPct = r.rtkSavings || "\u2014 %";
-      footer = `Kai (Kodif AI) | **${selectedModel.label}** | [RTK](https://github.com/rtk-ai/rtk) saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) | use sonnet or use opus for deeper analysis`;
+      const durationSec = Math.round(durationMs / 1e3);
+      footer = `Kai (Kodif AI) | **${selectedModel.label}** | [RTK](https://github.com/rtk-ai/rtk) saves ${rtkPct} | Tokens: ${r.inputTokens.toLocaleString()} in / ${r.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) $${r.costUsd.toFixed(4)} \xB7 ${r.numTurns} turn(s) \xB7 ${durationSec}s | use sonnet or use opus for deeper analysis`;
       auditLog(auditDb, {
         sender,
         repo: `${owner}/${repo}`,
