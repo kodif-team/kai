@@ -221,6 +221,20 @@ function gitOutput(command: string): string {
   return execSync(command, { stdio: "pipe", timeout: 30_000, encoding: "utf-8" }).trim();
 }
 
+function stripProviderCoAuthorFromHead(): void {
+  const message = gitOutput("git log -1 --pretty=%B");
+  const cleaned = message
+    .split("\n")
+    .filter((line) => !/^Co-Authored-By:\s*(Claude|Anthropic|OpenAI|ChatGPT|Codex|AI)/i.test(line.trim()))
+    .join("\n")
+    .trim();
+
+  if (cleaned && cleaned !== message.trim()) {
+    core.info("Removing AI provider Co-Authored-By trailer from HEAD commit");
+    execSync(`git commit --amend -m ${shellQuote(cleaned)}`, { stdio: "pipe", timeout: 30_000 });
+  }
+}
+
 function hasCommitIntent(message: string): boolean {
   return /\b(commit|push)\b/i.test(message);
 }
@@ -229,6 +243,19 @@ function commitVerificationNote(userMessage: string, beforeHead: string, branch:
   if (!hasCommitIntent(userMessage) || !beforeHead || !branch) return "";
 
   const quotedBranch = shellQuote(branch);
+  try {
+    execSync("git reset -- .claudeignore && rm -f .claudeignore", { stdio: "pipe", timeout: 5000 });
+  } catch { /* best-effort cleanup for bot-only ignore file */ }
+
+  const afterHeadBeforeCommit = gitOutput("git rev-parse HEAD");
+  if (afterHeadBeforeCommit !== beforeHead) {
+    stripProviderCoAuthorFromHead();
+    const amendedHead = gitOutput("git rev-parse HEAD");
+    core.info(`Commit requested — pushing existing commit ${amendedHead.slice(0, 7)} to ${branch}`);
+    execSync(`git push origin HEAD:${quotedBranch}`, { stdio: "pipe", timeout: 60_000 });
+    return `\n\n**Commit verification:** pushed \`${amendedHead.slice(0, 7)}\` to \`${branch}\`.`;
+  }
+
   const status = gitOutput("git status --porcelain");
 
   if (status) {
@@ -241,9 +268,11 @@ function commitVerificationNote(userMessage: string, beforeHead: string, branch:
 
   const afterHead = gitOutput("git rev-parse HEAD");
   if (afterHead !== beforeHead) {
-    core.info(`Commit requested — pushing ${afterHead.slice(0, 7)} to ${branch}`);
+    stripProviderCoAuthorFromHead();
+    const amendedHead = gitOutput("git rev-parse HEAD");
+    core.info(`Commit requested — pushing ${amendedHead.slice(0, 7)} to ${branch}`);
     execSync(`git push origin HEAD:${quotedBranch}`, { stdio: "pipe", timeout: 60_000 });
-    return `\n\n**Commit verification:** pushed \`${afterHead.slice(0, 7)}\` to \`${branch}\`.`;
+    return `\n\n**Commit verification:** pushed \`${amendedHead.slice(0, 7)}\` to \`${branch}\`.`;
   }
 
   core.warning("Commit requested but no commit was created and worktree is clean");
@@ -281,7 +310,7 @@ function buildCLIPrompt(
       `Task: ${userMessage}`,
       `IMPORTANT: Answer EXACTLY what the user asked. Do NOT default to security review unless explicitly asked.`,
       `Rules: concise, markdown, repos/<service>/path/file.py:line refs, max 50 lines. Don't repeat prior analysis.`,
-      `Git commits: NEVER add Co-Authored-By headers. Author is already set to kodif-ai[bot].`,
+      `Git commits: NEVER add Co-Authored-By headers or AI provider attribution. Author is already set to kodif-ai[bot].`,
     );
   }
   return parts.filter(Boolean).join("\n");
