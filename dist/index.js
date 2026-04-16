@@ -19735,10 +19735,10 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       (0, command_1.issueCommand)("error", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
     exports2.error = error;
-    function warning(message, properties = {}) {
+    function warning2(message, properties = {}) {
       (0, command_1.issueCommand)("warning", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
-    exports2.warning = warning;
+    exports2.warning = warning2;
     function notice(message, properties = {}) {
       (0, command_1.issueCommand)("notice", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
@@ -31788,7 +31788,6 @@ async function run() {
       return;
     }
     core.info(`Triggered by @${sender} in #${issueNumber}`);
-    core.info(`App ID provided: ${appId ? "yes" : "no"}, Private key provided: ${appPrivateKey ? "yes (" + appPrivateKey.length + " chars)" : "no"}`);
     let octokit;
     if (appId && appPrivateKey) {
       const installationId = await getInstallationId(
@@ -31810,13 +31809,17 @@ async function run() {
       core.info("Authenticated with GITHUB_TOKEN");
     }
     const { owner, repo } = context.repo;
-    await octokit.reactions.createForIssueComment({
-      owner,
-      repo,
-      comment_id: commentId,
-      content: "eyes"
-    });
-    core.info("Added \u{1F440} reaction");
+    try {
+      await octokit.reactions.createForIssueComment({
+        owner,
+        repo,
+        comment_id: commentId,
+        content: "eyes"
+      });
+      core.info("Added \u{1F440} reaction");
+    } catch (e) {
+      core.warning(`Could not add reaction: ${e instanceof Error ? e.message : e}`);
+    }
     const idx = commentBody.toLowerCase().indexOf(trigger.toLowerCase());
     const userMessage = commentBody.slice(idx + trigger.length).trim() || "review this PR";
     const { data: reply } = await octokit.issues.createComment({

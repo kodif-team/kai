@@ -43,7 +43,6 @@ async function run() {
     }
 
     core.info(`Triggered by @${sender} in #${issueNumber}`);
-    core.info(`App ID provided: ${appId ? "yes" : "no"}, Private key provided: ${appPrivateKey ? "yes (" + appPrivateKey.length + " chars)" : "no"}`);
 
     // Create authenticated Octokit
     let octokit: Octokit;
@@ -72,14 +71,18 @@ async function run() {
 
     const { owner, repo } = context.repo;
 
-    // 1. Add eyes reaction
-    await octokit.reactions.createForIssueComment({
-      owner,
-      repo,
-      comment_id: commentId,
-      content: "eyes",
-    });
-    core.info("Added 👀 reaction");
+    // 1. Add eyes reaction (graceful — may fail if app lacks reactions permission)
+    try {
+      await octokit.reactions.createForIssueComment({
+        owner,
+        repo,
+        comment_id: commentId,
+        content: "eyes",
+      });
+      core.info("Added 👀 reaction");
+    } catch (e: unknown) {
+      core.warning(`Could not add reaction: ${e instanceof Error ? e.message : e}`);
+    }
 
     // 2. Extract user message
     const idx = commentBody
