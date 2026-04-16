@@ -30,8 +30,9 @@ function hasClaudeCLI(): boolean {
 
 function hasRTK(): boolean {
   try {
-    execSync("rtk --version", { stdio: "pipe", timeout: 5000 });
-    return true;
+    const ver = execSync("rtk --version", { stdio: "pipe", timeout: 5000, encoding: "utf-8" });
+    // Only use RTK if it's our version (has 'proxy' command), not the crates.io rtk
+    return ver.includes("0.3") || ver.includes("0.4"); // our RTK is 0.3x+
   } catch { return false; }
 }
 

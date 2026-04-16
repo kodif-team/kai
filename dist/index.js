@@ -33399,8 +33399,8 @@ function hasClaudeCLI() {
 }
 function hasRTK() {
   try {
-    (0, import_node_child_process.execSync)("rtk --version", { stdio: "pipe", timeout: 5e3 });
-    return true;
+    const ver = (0, import_node_child_process.execSync)("rtk --version", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" });
+    return ver.includes("0.3") || ver.includes("0.4");
   } catch {
     return false;
   }
