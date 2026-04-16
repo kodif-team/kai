@@ -33498,10 +33498,12 @@ _Delete this comment to cancel._`
 
 _Delete this comment to cancel._`
         );
-        result = await callClaude(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
+        const response = await callClaude(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
+        const totalTokens = response.inputTokens + response.outputTokens;
+        result = response.text;
         result += `
 
-_Model: ${selectedModel.label} (${selectedModel.cost}/MTok) \xB7 \`use sonnet\` or \`use opus\` for deeper analysis_`;
+_Model: **${selectedModel.label}** \xB7 Tokens: ${response.inputTokens.toLocaleString()} in / ${response.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) \xB7 \`use sonnet\` or \`use opus\` for deeper analysis_`;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         core.error(`Claude API error: ${msg}`);
@@ -33563,7 +33565,12 @@ Instructions:
 - Keep responses focused \u2014 avoid unnecessary verbosity`,
     messages: [{ role: "user", content: userMessage }]
   });
-  return response.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  const text = response.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  return {
+    text,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens
+  };
 }
 async function safeUpdate(octokit, owner, repo, id, body) {
   try {

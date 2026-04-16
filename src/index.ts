@@ -127,8 +127,10 @@ async function run() {
         await safeUpdate(octokit, owner, repo, reply.id,
           `> @${sender} — got it\n\n📖 Reading PR context...\n🔍 Analyzing with Claude ${selectedModel.label}...\n\n_Delete this comment to cancel._`);
 
-        result = await callClaude(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
-        result += `\n\n_Model: ${selectedModel.label} (${selectedModel.cost}/MTok) · \`use sonnet\` or \`use opus\` for deeper analysis_`;
+        const response = await callClaude(anthropicApiKey, selectedModel.id, userMessage, prTitle, prBody, filesList, prDiff);
+        const totalTokens = response.inputTokens + response.outputTokens;
+        result = response.text;
+        result += `\n\n_Model: **${selectedModel.label}** · Tokens: ${response.inputTokens.toLocaleString()} in / ${response.outputTokens.toLocaleString()} out (${totalTokens.toLocaleString()} total) · \`use sonnet\` or \`use opus\` for deeper analysis_`;
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         core.error(`Claude API error: ${msg}`);
@@ -156,7 +158,7 @@ async function run() {
 async function callClaude(
   apiKey: string, modelId: string, userMessage: string,
   prTitle: string, prBody: string, filesList: string, diff: string,
-): Promise<string> {
+): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
   const client = new Anthropic({ apiKey });
 
   const response = await client.messages.create({
@@ -185,10 +187,16 @@ Instructions:
     messages: [{ role: "user", content: userMessage }],
   });
 
-  return response.content
+  const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map(b => b.text)
     .join("\n");
+
+  return {
+    text,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+  };
 }
 
 async function safeUpdate(octokit: Octokit, owner: string, repo: string, id: number, body: string) {
