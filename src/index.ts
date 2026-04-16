@@ -33,7 +33,7 @@ function requireRTK(): string {
   try {
     const ver = execSync("rtk --version", { stdio: "pipe", timeout: 5000, encoding: "utf-8" }).trim();
     core.info(`RTK found: ${ver}`);
-    execSync("rtk rewrite 'git status'", { stdio: "pipe", timeout: 5000 });
+    execSync('rtk rewrite "git status"', { stdio: "pipe", timeout: 5000 });
     return ver;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);

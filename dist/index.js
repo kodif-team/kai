@@ -27607,7 +27607,7 @@ function requireRTK() {
   try {
     const ver = (0, import_node_child_process.execSync)("rtk --version", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" }).trim();
     core.info(`RTK found: ${ver}`);
-    (0, import_node_child_process.execSync)("rtk rewrite 'git status'", { stdio: "pipe", timeout: 5e3 });
+    (0, import_node_child_process.execSync)('rtk rewrite "git status"', { stdio: "pipe", timeout: 5e3 });
     return ver;
   } catch (e) {
     const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
