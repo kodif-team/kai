@@ -2,6 +2,18 @@
 
 AI engineering agent for GitHub. Mention `@kai` in any PR comment to trigger.
 
+## First Law: cost efficiency overrides everything
+
+**Any change that increases the upper bound on cost per `@kai` invocation is a regression and must be reverted or justified with a load test.** Rules that follow from this law:
+
+1. **No paid API call without a pre-flight budget check.** We refuse the call locally when the projected cost exceeds the per-tier ceiling; we do not rely on the model aborting.
+2. **We do not pay for errors.** `max_turns` is set so that on a max-turns failure the spend is still within the tier ceiling. For `short-answer` intents it is 2 turns with every exploration tool disabled — the model cannot burn tokens exploring.
+3. **Every code path that hits Claude must go through the stable-prefix prompt builder** so Anthropic's cache can hit. A cache-miss run on a known-stable PR is a bug.
+4. **The footer is load-bearing** — every reply advertises input, output, cost, cache hit, RTK savings and turns. If you can't see the footer, you don't merge the change.
+5. **Short-answer requests have a hard prompt ceiling** (`KAI_SHORT_ANSWER_MAX_INPUT_TOKENS`, default 6000). A bigger prompt is not allowed to enter Claude under the short-answer label — we redirect to full review tier instead.
+6. **Hooks are mandatory.** RTK savings == 0% means the hook isn't active; treat that as an incident, not a metric to log and move on.
+7. **Operator escalation beats quiet spending.** If we can't honor the contract (router dead, compose missing, docker.sock not readable), we return a refusal reply with a one-line operator action. We don't "try harder" by re-hitting the paid API.
+
 ## Setup (3 steps)
 
 ### 1. Install the Kai GitHub App

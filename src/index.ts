@@ -13,6 +13,14 @@ import { ensureCacheSchema, lookupCachedReply, storeCachedReply } from "./cache"
 import { ensureQualitySchema, recordCacheHit, recordCommitVerification, detectAndRecordFollowup } from "./quality";
 import { selectRelevantFiles } from "./file-focus";
 import { buildCacheFriendlyPrompt } from "./prompt-order";
+import {
+  disallowedToolsFor as budgetDisallowedToolsFor,
+  getMaxTurns as budgetGetMaxTurns,
+  isShortAnswerRequest as budgetIsShortAnswerRequest,
+  MAX_COST_USD_BY_TIER as BUDGET_MAX_COST_USD_BY_TIER,
+  MAX_PROMPT_TOKENS as BUDGET_MAX_PROMPT_TOKENS,
+  preflightBudget,
+} from "./budget";
 
 // --- Audit DB (SQLite, persistent via Docker volume) ---
 
@@ -706,13 +714,9 @@ function commitVerificationNote(
   return `\n\n**Commit verification failed:** no file changes or new commit were found after the requested work. Nothing was pushed.`;
 }
 
-// Short-answer heuristic: user asked for a terse reply (one sentence, brief,
-// yes/no, etc). For these we tighten Claude's exploration budget so it doesn't
-// Read a dozen files to produce a 20-word answer — that was the 12-turn, $0.057
-// pattern we hit on 2026-04-17.
-function isShortAnswerRequest(message: string): boolean {
-  return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
-}
+// Re-exported from src/budget.ts so existing callsites compile without diff
+// noise. All budget decisions live in budget.ts (single source of truth).
+const isShortAnswerRequest = budgetIsShortAnswerRequest;
 
 function buildCLIPrompt(
   userMessage: string, prTitle: string, prBody: string,
@@ -776,25 +780,7 @@ function buildCLIPrompt(
   return buildCacheFriendlyPrompt({ stable, dynamic });
 }
 
-// Smart max_turns based on task complexity
-function getMaxTurns(message: string, modelTier: string): number {
-  if (modelTier === "opus") return 25;
-  if (modelTier === "sonnet") return 20;
-  // Haiku: scale by task type. Earlier we used 5 for "simple" read tasks which
-  // repeatedly hit error_max_turns (Claude needs ≥1 diff-read + ≥1 file-read +
-  // 1 synthesis = 3-5 turns minimum; leave headroom). "what is the biggest risk"
-  // also matched simple but is actually a review — bumped to 12 default.
-  const needsWrite = /fix|commit|push|apply|create|patch|refactor|document/i.test(message);
-  if (needsWrite) return 20;
-  // Short-answer: exploration is blocked via --disallowed-tools (Read, Bash,
-  // Glob, Web*), so Claude must answer from the pre-digested diff in the
-  // prompt. 3 turns = tool-attempt -> rejection -> final answer. Keeps cost
-  // bounded regardless of whether the model tries to explore.
-  if (isShortAnswerRequest(message)) return 3;
-  const isTrulySimple = message.length < 50
-    && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
-  return isTrulySimple ? 8 : 12;
-}
+const getMaxTurns = budgetGetMaxTurns;
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const CLI_TIMEOUT_MS = 300_000;
@@ -808,14 +794,10 @@ function maxRetriesFor(tier: string): number {
   return Number(process.env.KAI_MAX_CLI_RETRIES || 3);
 }
 
-// Per-call cost + prompt-size ceilings. Post-call cost is logged to audit; if
-// over the ceiling we flag status so ops can see drift quickly.
-const MAX_COST_USD_BY_TIER: Record<string, number> = {
-  haiku: Number(process.env.KAI_MAX_COST_USD_HAIKU || 0.5),
-  sonnet: Number(process.env.KAI_MAX_COST_USD_SONNET || 2),
-  opus: Number(process.env.KAI_MAX_COST_USD_OPUS || 5),
-};
-const MAX_PROMPT_TOKENS = Number(process.env.KAI_MAX_PROMPT_TOKENS || 50_000);
+// Single source of truth for budget caps lives in src/budget.ts. Re-bind for
+// the legacy callsites that read these directly.
+const MAX_COST_USD_BY_TIER = BUDGET_MAX_COST_USD_BY_TIER;
+const MAX_PROMPT_TOKENS = BUDGET_MAX_PROMPT_TOKENS;
 
 const LOADING_GIF = "https://emojis.slackmojis.com/emojis/images/1643514453/4358/loading.gif?1643514453";
 
@@ -876,16 +858,7 @@ async function callClaudeCLIWithHeartbeat(
   throw new Error("All CLI retries exhausted");
 }
 
-// Short-answer requests ship with the full unified PR diff pre-fetched in the
-// prompt. Block ALL exploration tools so Claude cannot burn turns re-reading
-// files or shell-exploring — it must answer from the diff text. This is the
-// only way to keep short-answer cost predictable; with Read/Bash allowed,
-// Claude ignored the "do not read" prompt directive on 2026-04-17 and still
-// produced 173K-token runs.
-function disallowedToolsFor(userMessage: string): string[] {
-  if (!isShortAnswerRequest(userMessage)) return [];
-  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
-}
+const disallowedToolsFor = budgetDisallowedToolsFor;
 
 function runCLIWithHeartbeat(
   apiKey: string, modelId: string, prompt: string, maxTurns: number, isRoot: boolean,
@@ -1401,14 +1374,26 @@ async function run() {
         });
         throw compressionError;
       }
-      // Hard prompt-size ceiling — guards against "compressor returned original"
-      // or huge paste in comment. Fails closed before paying the model.
+      // FIRST LAW: single place that enforces budget before any external API
+      // call. Runs all per-tier, prompt-size, and worst-case cost checks.
       const finalPromptTokens = estimateTokens(finalPrompt);
-      if (finalPromptTokens > MAX_PROMPT_TOKENS) {
-        throw new Error(
-          `Final prompt ${finalPromptTokens} tokens exceeds KAI_MAX_PROMPT_TOKENS=${MAX_PROMPT_TOKENS}. `
-          + `Compression may be disabled or ineffective. Refusing to call paid model.`,
-        );
+      const preflight = preflightBudget(userMessage, finalPromptTokens, modelTier);
+      if (!preflight.allowed) {
+        result = `⛔ Pre-flight refused paid model call: ${preflight.reason}.\n\nIf you asked for a terse answer, drop the \`one sentence\` / \`briefly\` / \`tl;dr\` qualifier to get a full review — or add \`use sonnet\` / \`use opus\` to opt into a bigger budget tier.`;
+        footer = `Kai · preflight-refused · 0K in / 0K out · $0.0000 · 0t · ${Math.round((Date.now() - startTime) / 1000)}s`;
+        auditLog(auditDb, {
+          sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
+          model: "preflight-refused", message: rawMessage,
+          durationMs: Date.now() - startTime,
+          costUsd: 0, tokensIn: finalPromptTokens, tokensOut: 0,
+          status: "refused-pre-flight", error: preflight.reason,
+        });
+        if (!(await commentExists(octokit, owner, repo, replyCommentId))) return;
+        await safeUpdate(octokit, owner, repo, replyCommentId,
+          `> @${sender}: ${rawMessage}${tierNotice}\n\n${result}\n\n---\n<sub>${footer}</sub>`);
+        sessionUpdate(auditDb, runId, "completed", { status: "refused-pre-flight" });
+        core.warning(`Pre-flight refused paid call: ${preflight.reason}`);
+        return;
       }
 
       const maxTurns = getMaxTurns(userMessage, modelTier);

@@ -28388,6 +28388,60 @@ function buildCacheFriendlyPrompt(sections) {
   return parts.join("\n\n").trim();
 }
 
+// src/budget.ts
+var PRICING_USD_PER_MILLION = {
+  // Claude Haiku 4.5 (ballpark — tune as Anthropic publishes updates).
+  haiku: { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
+  sonnet: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
+  opus: { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 }
+};
+var MAX_COST_USD_BY_TIER = {
+  haiku: Number(process.env.KAI_MAX_COST_USD_HAIKU || 0.05),
+  sonnet: Number(process.env.KAI_MAX_COST_USD_SONNET || 0.5),
+  opus: Number(process.env.KAI_MAX_COST_USD_OPUS || 2)
+};
+function isShortAnswerRequest(message) {
+  return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
+}
+function getMaxTurns(message, modelTier) {
+  if (modelTier === "opus") return 25;
+  if (modelTier === "sonnet") return 20;
+  if (/fix|commit|push|apply|create|patch|refactor|document/i.test(message)) return 20;
+  if (isShortAnswerRequest(message)) return 2;
+  const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
+  return isTrulySimple ? 8 : 12;
+}
+function disallowedToolsFor(userMessage) {
+  if (!isShortAnswerRequest(userMessage)) return [];
+  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
+}
+var MAX_PROMPT_TOKENS = Number(process.env.KAI_MAX_PROMPT_TOKENS || 5e4);
+var SHORT_ANSWER_MAX_INPUT_TOKENS = Number(process.env.KAI_SHORT_ANSWER_MAX_INPUT_TOKENS || 6e3);
+function preflightBudget(userMessage, promptTokens, tier) {
+  if (promptTokens > MAX_PROMPT_TOKENS) {
+    return { allowed: false, reason: `prompt ${promptTokens} tokens > hard ceiling ${MAX_PROMPT_TOKENS}` };
+  }
+  if (isShortAnswerRequest(userMessage) && promptTokens > SHORT_ANSWER_MAX_INPUT_TOKENS) {
+    return {
+      allowed: false,
+      reason: `short-answer prompt ${promptTokens} tokens > cap ${SHORT_ANSWER_MAX_INPUT_TOKENS}`
+    };
+  }
+  const maxTurns = getMaxTurns(userMessage, tier);
+  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
+  const worstInputCost = maxTurns * promptTokens * price.input / 1e6;
+  const worstOutputCost = maxTurns * 1e3 * price.output / 1e6;
+  const worstTotal = worstInputCost + worstOutputCost;
+  const cap = MAX_COST_USD_BY_TIER[tier] ?? MAX_COST_USD_BY_TIER.haiku;
+  if (worstTotal > cap) {
+    return {
+      allowed: false,
+      reason: `worst-case projection $${worstTotal.toFixed(4)} > tier cap $${cap} (${maxTurns}t \xD7 ${promptTokens}tok)`
+    };
+  }
+  return { allowed: true };
+}
+
 // src/index.ts
 var AUDIT_DB_PATH = process.env.KAI_AUDIT_DB || "/home/kai/data/kai-audit.db";
 function initAuditDb() {
@@ -29012,13 +29066,11 @@ function commitVerificationNote(userMessage, beforeHead, branch, githubToken) {
 
 **Commit verification failed:** no file changes or new commit were found after the requested work. Nothing was pushed.`;
 }
-function isShortAnswerRequest(message) {
-  return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
-}
+var isShortAnswerRequest2 = isShortAnswerRequest;
 function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext, repoFullName, route, focusedFiles = [], prDiffDigest = "") {
   if (isMetaQuestion(userMessage)) return META_TEMPLATE;
   const archTask = isArchitectureQuestion(userMessage);
-  const shortAnswer = isShortAnswerRequest(userMessage);
+  const shortAnswer = isShortAnswerRequest2(userMessage);
   const stable = [
     `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}. PR: "${prTitle}"`
   ];
@@ -29061,15 +29113,7 @@ ${prCommentsContext}`);
   );
   return buildCacheFriendlyPrompt({ stable, dynamic });
 }
-function getMaxTurns(message, modelTier) {
-  if (modelTier === "opus") return 25;
-  if (modelTier === "sonnet") return 20;
-  const needsWrite = /fix|commit|push|apply|create|patch|refactor|document/i.test(message);
-  if (needsWrite) return 20;
-  if (isShortAnswerRequest(message)) return 3;
-  const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
-  return isTrulySimple ? 8 : 12;
-}
+var getMaxTurns2 = getMaxTurns;
 var HEARTBEAT_INTERVAL_MS = 15e3;
 var CLI_TIMEOUT_MS = 3e5;
 var RETRY_DELAYS = [15e3, 3e4, 6e4];
@@ -29078,12 +29122,7 @@ function maxRetriesFor(tier) {
   if (tier === "sonnet") return 2;
   return Number(process.env.KAI_MAX_CLI_RETRIES || 3);
 }
-var MAX_COST_USD_BY_TIER = {
-  haiku: Number(process.env.KAI_MAX_COST_USD_HAIKU || 0.5),
-  sonnet: Number(process.env.KAI_MAX_COST_USD_SONNET || 2),
-  opus: Number(process.env.KAI_MAX_COST_USD_OPUS || 5)
-};
-var MAX_PROMPT_TOKENS = Number(process.env.KAI_MAX_PROMPT_TOKENS || 5e4);
+var MAX_COST_USD_BY_TIER2 = MAX_COST_USD_BY_TIER;
 var LOADING_GIF = "https://emojis.slackmojis.com/emojis/images/1643514453/4358/loading.gif?1643514453";
 var PHASES = [
   "Reading PR context",
@@ -29137,10 +29176,7 @@ _Delete this comment to cancel._`
   }
   throw new Error("All CLI retries exhausted");
 }
-function disallowedToolsFor(userMessage) {
-  if (!isShortAnswerRequest(userMessage)) return [];
-  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
-}
+var disallowedToolsFor2 = disallowedToolsFor;
 function runCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, isRoot, hb, db, runId, disallowedTools = []) {
   return new Promise((resolve, reject) => {
     const claudeArgs = ["-p", "--dangerously-skip-permissions", "--output-format", "json", "--max-turns", String(maxTurns), "--model", modelId];
@@ -29672,12 +29708,43 @@ ${cached.reply}
         throw compressionError;
       }
       const finalPromptTokens = estimateTokens(finalPrompt);
-      if (finalPromptTokens > MAX_PROMPT_TOKENS) {
-        throw new Error(
-          `Final prompt ${finalPromptTokens} tokens exceeds KAI_MAX_PROMPT_TOKENS=${MAX_PROMPT_TOKENS}. Compression may be disabled or ineffective. Refusing to call paid model.`
+      const preflight = preflightBudget(userMessage, finalPromptTokens, modelTier);
+      if (!preflight.allowed) {
+        result = `\u26D4 Pre-flight refused paid model call: ${preflight.reason}.
+
+If you asked for a terse answer, drop the \`one sentence\` / \`briefly\` / \`tl;dr\` qualifier to get a full review \u2014 or add \`use sonnet\` / \`use opus\` to opt into a bigger budget tier.`;
+        footer = `Kai \xB7 preflight-refused \xB7 0K in / 0K out \xB7 $0.0000 \xB7 0t \xB7 ${Math.round((Date.now() - startTime) / 1e3)}s`;
+        auditLog(auditDb, {
+          sender,
+          repo: `${owner}/${repo}`,
+          prNumber: issueNumber,
+          model: "preflight-refused",
+          message: rawMessage,
+          durationMs: Date.now() - startTime,
+          costUsd: 0,
+          tokensIn: finalPromptTokens,
+          tokensOut: 0,
+          status: "refused-pre-flight",
+          error: preflight.reason
+        });
+        if (!await commentExists(octokit, owner, repo, replyCommentId)) return;
+        await safeUpdate(
+          octokit,
+          owner,
+          repo,
+          replyCommentId,
+          `> @${sender}: ${rawMessage}${tierNotice}
+
+${result}
+
+---
+<sub>${footer}</sub>`
         );
+        sessionUpdate(auditDb, runId, "completed", { status: "refused-pre-flight" });
+        core.warning(`Pre-flight refused paid call: ${preflight.reason}`);
+        return;
       }
-      const maxTurns = getMaxTurns(userMessage, modelTier);
+      const maxTurns = getMaxTurns2(userMessage, modelTier);
       core.info(`Max turns: ${maxTurns} (task: "${userMessage.slice(0, 40)}")`);
       const heartbeatCtx = {
         octokit,
@@ -29687,7 +29754,7 @@ ${cached.reply}
         sender,
         modelLabel: selectedModel.label
       };
-      const disallowed = disallowedToolsFor(userMessage);
+      const disallowed = disallowedToolsFor2(userMessage);
       if (disallowed.length) core.info(`Gated tools: ${disallowed.join(",")}`);
       const r = await callClaudeCLIWithHeartbeat(
         anthropicApiKey,
@@ -29725,7 +29792,7 @@ ${cached.reply}
 
 > \u26A0\uFE0F **RTK bypassed** \u2014 no token savings recorded for this call. Operator: verify hook in \`$HOME/.claude/settings.json\`.`;
       }
-      const costCap = MAX_COST_USD_BY_TIER[modelTier] ?? MAX_COST_USD_BY_TIER.haiku;
+      const costCap = MAX_COST_USD_BY_TIER2[modelTier] ?? MAX_COST_USD_BY_TIER2.haiku;
       const costOverCap = r.costUsd > costCap;
       if (costOverCap) {
         core.error(`Cost cap exceeded: $${r.costUsd.toFixed(4)} > $${costCap} (${modelTier})`);
