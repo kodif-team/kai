@@ -34314,6 +34314,10 @@ var COMPRESSOR_BUDGET_HAIKU = 3e3;
 var COMPRESSOR_BUDGET_SONNET = 1e4;
 var COMPRESSOR_BUDGET_OPUS = 2e4;
 var ROUTER_TIMEOUT_MS = 5e3;
+var DEFAULT_CLAUDE_SETTINGS_PATH = "/home/kai/.claude/settings.json";
+var DEFAULT_RTK_HOOK_SKIP_CHECK = false;
+var DEFAULT_TIER_SUGGEST_DISABLE = false;
+var DEFAULT_DEBUG_COMPRESSOR = false;
 function env(name) {
   const value = process.env[name];
   if (!value || !value.trim()) throw new Error(`Missing required env: ${name}`);
@@ -34341,6 +34345,16 @@ function optBool(name) {
   if (raw === "false") return false;
   throw new Error(`Invalid boolean for ${name}: ${raw}`);
 }
+function boolOrConstant(name, fallback) {
+  const value = optBool(name);
+  if (value !== null) return value;
+  return fallback;
+}
+function envOrConstant(name, fallback) {
+  const value = optEnv(name);
+  if (value !== null) return value;
+  return fallback;
+}
 function loadConfig() {
   const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN");
   const runnerToken = optEnv("RUNNER_TOKEN");
@@ -34363,10 +34377,10 @@ function loadConfig() {
     runnerAllowNoToken,
     runnerToken,
     routerGitContext: env("KAI_ROUTER_GIT_CONTEXT"),
-    claudeSettingsPath: env("KAI_CLAUDE_SETTINGS_PATH"),
-    rtkHookSkipCheck: bool("KAI_RTK_HOOK_SKIP_CHECK"),
-    tierSuggestDisabled: bool("KAI_TIER_SUGGEST_DISABLE"),
-    debugCompressor: bool("KAI_DEBUG_COMPRESSOR"),
+    claudeSettingsPath: envOrConstant("KAI_CLAUDE_SETTINGS_PATH", DEFAULT_CLAUDE_SETTINGS_PATH),
+    rtkHookSkipCheck: boolOrConstant("KAI_RTK_HOOK_SKIP_CHECK", DEFAULT_RTK_HOOK_SKIP_CHECK),
+    tierSuggestDisabled: boolOrConstant("KAI_TIER_SUGGEST_DISABLE", DEFAULT_TIER_SUGGEST_DISABLE),
+    debugCompressor: boolOrConstant("KAI_DEBUG_COMPRESSOR", DEFAULT_DEBUG_COMPRESSOR),
     routerTimeoutMs: ROUTER_TIMEOUT_MS,
     logLevel: parseLogLevel2(env("KAI_LOG_LEVEL"))
   };
