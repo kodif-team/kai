@@ -28830,9 +28830,13 @@ function commitVerificationNote(userMessage, beforeHead, branch, githubToken) {
 
 **Commit verification failed:** no file changes or new commit were found after the requested work. Nothing was pushed.`;
 }
+function isShortAnswerRequest(message) {
+  return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
+}
 function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsContext, repoFullName, route, focusedFiles = []) {
   if (isMetaQuestion(userMessage)) return META_TEMPLATE;
   const archTask = isArchitectureQuestion(userMessage);
+  const shortAnswer = isShortAnswerRequest(userMessage);
   const stable = [
     `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}. PR: "${prTitle}"`
   ];
@@ -28845,7 +28849,10 @@ ${KODIF_ARCH_CONTEXT}`);
   } else {
     stable.push(
       `PR repo checked out in current dir. Use git diff origin/main...HEAD and Read to inspect PROJECT code only.`,
-      `Kodif repos available at /home/kai/architect/repos/ (read-only). Use for cross-service context.`,
+      // Cross-service context invite — skipped for short-answer tasks because
+      // it provoked Claude to wander /home/kai/architect/repos/ and balloon
+      // token usage on trivial questions.
+      shortAnswer ? `STRICT BUDGET: this is a short-answer request. Read ONLY the diff (git diff origin/main...HEAD). Do NOT Read full files. Do NOT explore /home/kai/architect/repos/. Max 3 tool calls total. Return at most 2 sentences.` : `Kodif repos available at /home/kai/architect/repos/ (read-only). Use for cross-service context.`,
       `IGNORE: .github/, .claude/, CLAUDE.md, *.yml workflow files \u2014 these are bot infrastructure, not project code.`,
       `Rules: concise, markdown, repos/<service>/path/file.py:line refs, max 50 lines. Don't repeat prior analysis.`,
       `For imperative write tasks (fix/add/update/create/patch/refactor/document), commit and push the change to the PR branch unless the user explicitly asks not to.`,
@@ -28862,7 +28869,7 @@ ${KODIF_ARCH_CONTEXT}`);
 ${prCommentsContext}`);
   dynamic.push(
     `Task: ${userMessage}`,
-    archTask ? `Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.` : `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.`
+    archTask ? `Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.` : shortAnswer ? `This is a short-answer task. Produce the final one-sentence answer now. Do NOT open any file.` : `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.`
   );
   return buildCacheFriendlyPrompt({ stable, dynamic });
 }
@@ -28871,6 +28878,7 @@ function getMaxTurns(message, modelTier) {
   if (modelTier === "sonnet") return 20;
   const needsWrite = /fix|commit|push|apply|create|patch|refactor|document/i.test(message);
   if (needsWrite) return 20;
+  if (isShortAnswerRequest(message)) return 6;
   const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
   return isTrulySimple ? 8 : 12;
 }
