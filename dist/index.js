@@ -28521,7 +28521,6 @@ function detectAndRecordFollowup(db, sender, repo, prNumber) {
 }
 
 // src/audit.ts
-var TIER_RANK = { haiku: 1, sonnet: 2, opus: 3 };
 function envNumber(name, fallback) {
   const raw = process.env[name];
   if (!raw || !raw.trim()) {
@@ -28535,7 +28534,6 @@ function envNumber(name, fallback) {
 var DEFAULT_RATE_LIMIT_SENDER_PER_HOUR = 20;
 var DEFAULT_RATE_LIMIT_REPO_PER_HOUR = 100;
 var DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY = 0.25;
-var DEFAULT_ALLOWLIST_TIER = "haiku";
 function initAuditDb(dbPath) {
   const db = new import_node_sqlite.DatabaseSync(dbPath);
   db.exec(`
@@ -28600,13 +28598,6 @@ function initAuditDb(dbPath) {
       used_model INTEGER NOT NULL,
       duration_ms INTEGER NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS model_allowlist (
-      sender TEXT PRIMARY KEY,
-      max_tier TEXT NOT NULL CHECK(max_tier IN ('haiku','sonnet','opus')),
-      added_at TEXT NOT NULL DEFAULT (datetime('now')),
-      added_by TEXT,
-      note TEXT
-    );
     CREATE TABLE IF NOT EXISTS rate_limits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp TEXT NOT NULL DEFAULT (datetime('now')),
@@ -28618,29 +28609,9 @@ function initAuditDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_rate_limits_sender_ts ON rate_limits(sender, timestamp);
     CREATE INDEX IF NOT EXISTS idx_rate_limits_repo_ts ON rate_limits(repo, timestamp)
   `);
-  seedModelAllowlist(db);
   ensureCacheSchema(db);
   ensureQualitySchema(db);
   return db;
-}
-function seedModelAllowlist(db) {
-  const raw = process.env.KAI_MODEL_ALLOWLIST?.trim();
-  if (!raw) return;
-  const stmt = db.prepare(
-    `INSERT OR REPLACE INTO model_allowlist (sender, max_tier, added_by, note)
-     VALUES (?, ?, 'env-seed', 'seeded from KAI_MODEL_ALLOWLIST')`
-  );
-  for (const entry of raw.split(",")) {
-    const [senderRaw, tierRaw] = entry.split(":").map((s) => s?.trim());
-    if (!senderRaw || !tierRaw) continue;
-    const tier = tierRaw.toLowerCase();
-    if (tier !== "haiku" && tier !== "sonnet" && tier !== "opus") continue;
-    try {
-      stmt.run(senderRaw, tier);
-    } catch (e) {
-      core.warning(`Allowlist seed failed for ${senderRaw}: ${e}`);
-    }
-  }
 }
 function latestAuditId(db, sender, repoFull, prNumber) {
   try {
@@ -28693,23 +28664,6 @@ function recordRateLimit(db, sender, repoFull, tier, costUsd) {
   } catch (e) {
     core.warning(`Rate-limit record failed: ${e}`);
   }
-}
-function resolveAllowedModel(db, sender, requestedTier) {
-  const fallbackTier = (process.env.KAI_ALLOWLIST_DEFAULT_TIER ?? DEFAULT_ALLOWLIST_TIER).toLowerCase();
-  const requested = requestedTier.toLowerCase();
-  if (!db) {
-    const allowed2 = TIER_RANK[requested] <= TIER_RANK[fallbackTier] ? requested : fallbackTier;
-    return { tier: allowed2, downgraded: allowed2 !== requested, maxTier: fallbackTier };
-  }
-  let maxTier = fallbackTier;
-  try {
-    const row = db.prepare(`SELECT max_tier FROM model_allowlist WHERE sender = ?`).get(sender);
-    if (row?.max_tier && TIER_RANK[row.max_tier]) maxTier = row.max_tier;
-  } catch (e) {
-    core.warning(`Allowlist lookup failed for ${sender}: ${e}`);
-  }
-  const allowed = TIER_RANK[requested] <= TIER_RANK[maxTier] ? requested : maxTier;
-  return { tier: allowed, downgraded: allowed !== requested, maxTier };
 }
 function sessionStart(db, data) {
   try {
@@ -29518,11 +29472,10 @@ var MAX_COST_USD_BY_TIER2 = MAX_COST_USD_BY_TIER;
 var MAX_PROMPT_TOKENS2 = MAX_PROMPT_TOKENS;
 var disallowedToolsFor2 = disallowedToolsFor;
 var TIER_ESCALATION_ORDER = ["haiku", "sonnet", "opus"];
-var TIER_RANK2 = { haiku: 1, sonnet: 2, opus: 3 };
-function escalationTierSequence(startTier, senderMaxTier) {
-  const maxRank = TIER_RANK2[senderMaxTier] ?? 1;
+var TIER_RANK = { haiku: 1, sonnet: 2, opus: 3 };
+function escalationTierSequence(startTier) {
   return TIER_ESCALATION_ORDER.filter(
-    (t) => TIER_RANK2[t] > TIER_RANK2[startTier] && TIER_RANK2[t] <= maxRank
+    (t) => TIER_RANK[t] > TIER_RANK[startTier]
   );
 }
 async function run() {
@@ -29577,14 +29530,9 @@ async function run() {
       }
     }
     const requestedTier = suggestedTier ?? parsedTier;
-    const { tier: modelTier, downgraded: tierDowngraded, maxTier: senderMaxTier } = resolveAllowedModel(auditDb, sender, requestedTier);
+    const modelTier = requestedTier;
     const selectedModel = MODELS[modelTier];
-    const tierNotice = tierDowngraded ? `
-
-> _Note: @${sender} is allowed up to **${senderMaxTier}**. Requested **${requestedTier}** was downgraded to **${modelTier}**. Ask an admin to update the allowlist._` : "";
-    if (tierDowngraded) {
-      core3.warning(`Tier downgrade for @${sender}: ${requestedTier} -> ${modelTier} (max=${senderMaxTier})`);
-    }
+    const tierNotice = "";
     const route = await routeEventWithLocalLLM(userMessage, modelTier, {
       url: routerUrl,
       model: routerModel,
@@ -30026,7 +29974,7 @@ ${cached.reply}
       let activeModel = selectedModel;
       let preflight = preflightBudget(userMessage, finalPromptTokens, activeTier);
       if (!preflight.allowed && preflight.kind === "cost-over-cap") {
-        for (const candidateTier of escalationTierSequence(activeTier, senderMaxTier)) {
+        for (const candidateTier of escalationTierSequence(activeTier)) {
           const candidate = preflightBudget(userMessage, finalPromptTokens, candidateTier);
           if (candidate.allowed) {
             escalationNotice = `
@@ -30062,7 +30010,7 @@ ${cached.reply}
       }
       if (!preflight.allowed) {
         const elapsedSec = Math.round((Date.now() - startTime) / 1e3);
-        const hint = preflight.kind === "hard-ceiling" ? `Prompt (${finalPromptTokens} tokens) exceeds the ${MAX_PROMPT_TOKENS2}-token hard ceiling. Split the request into smaller tasks.` : escalationTierSequence(modelTier, senderMaxTier).length === 0 ? `@${sender} is capped at **${senderMaxTier}**. Ask an admin to raise the allowlist.` : `Even the highest permitted tier cannot handle this prompt size. Reduce context.`;
+        const hint = preflight.kind === "hard-ceiling" ? `Prompt (${finalPromptTokens} tokens) exceeds the ${MAX_PROMPT_TOKENS2}-token hard ceiling. Split the request into smaller tasks.` : escalationTierSequence(modelTier).length === 0 ? `Even the highest tier cannot handle this prompt size. Reduce context.` : `Even the highest tier that passed budget checks cannot handle this prompt size. Reduce context.`;
         result = `\u26D4 Pre-flight refused: ${preflight.reason}.
 
 ${hint}`;

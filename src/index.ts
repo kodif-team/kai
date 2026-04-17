@@ -14,7 +14,7 @@ import { selectRelevantFiles } from "./file-focus";
 import { buildCacheFriendlyPrompt } from "./prompt-order";
 import { loadConfig } from "./config";
 import { createLogger, errorMeta } from "./log";
-import { initAuditDb, latestAuditId, checkRateLimit, recordRateLimit, resolveAllowedModel, sessionStart, sessionUpdate, auditLog, logRouterDecision, logContextOptimization, detectAndRecordFollowupAudit as detectAndRecordFollowup, recordAuditQualitySignals as recordCommitVerification, recordAuditCacheHit as recordCacheHit } from "./audit";
+import { initAuditDb, latestAuditId, checkRateLimit, recordRateLimit, sessionStart, sessionUpdate, auditLog, logRouterDecision, logContextOptimization, detectAndRecordFollowupAudit as detectAndRecordFollowup, recordAuditQualitySignals as recordCommitVerification, recordAuditCacheHit as recordCacheHit } from "./audit";
 import { parseModelFromMessage, requireClaudeCLI, requireRTK, buildHeartbeatFrame, callClaudeCLIWithHeartbeat, safeUpdate, type HeartbeatContext } from "./runner";
 import { getPullRequestDiffDigest, truncateDiffDigest } from "./pr-diff";
 import { buildRepoContextInstructions } from "./repo-context";
@@ -287,10 +287,9 @@ const disallowedToolsFor = budgetDisallowedToolsFor;
 const TIER_ESCALATION_ORDER = ["haiku", "sonnet", "opus"] as const;
 const TIER_RANK: Record<string, number> = { haiku: 1, sonnet: 2, opus: 3 };
 
-function escalationTierSequence(startTier: string, senderMaxTier: string): string[] {
-  const maxRank = TIER_RANK[senderMaxTier] ?? 1;
+function escalationTierSequence(startTier: string): string[] {
   return TIER_ESCALATION_ORDER.filter(
-    (t) => TIER_RANK[t] > TIER_RANK[startTier] && TIER_RANK[t] <= maxRank,
+    (t) => TIER_RANK[t] > TIER_RANK[startTier],
   );
 }
 
@@ -338,7 +337,7 @@ async function run() {
     octokit = new Octokit({ auth: githubToken });
     ({ owner, repo } = context.repo);
 
-    // Audit + Session: init DB early so allowlist lookup sees it.
+    // Audit + Session: init DB early so every path can record status.
     const auditDb = initAuditDb(cfg.auditDbPath);
 
     // Self-heal local LLM containers if they're down. Runs before any router
@@ -350,7 +349,7 @@ async function run() {
     const userSpecifiedTier = /\buse\s+(haiku|sonnet|opus)\b/i.test(rawMessage);
 
     // If the user didn't explicitly pick a tier, ask the local LLM to suggest one
-    // based on task complexity. Honors user override + allowlist cap. Skipped
+    // based on task complexity. Skipped
     // when router and compressor share the same endpoint (llama.cpp --parallel 1
     // chokes on back-to-back hits) or when disabled via env.
     let suggestedTier: string | null = null;
@@ -365,15 +364,9 @@ async function run() {
       } catch (e) { core.warning(`Tier suggest failed: ${e}`); }
     }
     const requestedTier = suggestedTier ?? parsedTier;
-    const { tier: modelTier, downgraded: tierDowngraded, maxTier: senderMaxTier } =
-      resolveAllowedModel(auditDb, sender, requestedTier);
+    const modelTier = requestedTier;
     const selectedModel = MODELS[modelTier];
-    const tierNotice = tierDowngraded
-      ? `\n\n> _Note: @${sender} is allowed up to **${senderMaxTier}**. Requested **${requestedTier}** was downgraded to **${modelTier}**. Ask an admin to update the allowlist._`
-      : "";
-    if (tierDowngraded) {
-      core.warning(`Tier downgrade for @${sender}: ${requestedTier} -> ${modelTier} (max=${senderMaxTier})`);
-    }
+    const tierNotice = "";
     const route = await routeEventWithLocalLLM(userMessage, modelTier, {
       url: routerUrl,
       model: routerModel,
@@ -745,7 +738,7 @@ async function run() {
 
       // Auto-escalation: if haiku budget is exceeded, try sonnet, then opus.
       if (!preflight.allowed && preflight.kind === "cost-over-cap") {
-        for (const candidateTier of escalationTierSequence(activeTier, senderMaxTier)) {
+        for (const candidateTier of escalationTierSequence(activeTier)) {
           const candidate = preflightBudget(userMessage, finalPromptTokens, candidateTier);
           if (candidate.allowed) {
             escalationNotice = `\n\n> _Budget for **${activeTier}** exceeded (${finalPromptTokens} tokens). Auto-escalated to **${candidateTier}**._`;
@@ -771,9 +764,9 @@ async function run() {
         const elapsedSec = Math.round((Date.now() - startTime) / 1000);
         const hint = preflight.kind === "hard-ceiling"
           ? `Prompt (${finalPromptTokens} tokens) exceeds the ${MAX_PROMPT_TOKENS}-token hard ceiling. Split the request into smaller tasks.`
-          : escalationTierSequence(modelTier, senderMaxTier).length === 0
-            ? `@${sender} is capped at **${senderMaxTier}**. Ask an admin to raise the allowlist.`
-            : `Even the highest permitted tier cannot handle this prompt size. Reduce context.`;
+          : escalationTierSequence(modelTier).length === 0
+            ? `Even the highest tier cannot handle this prompt size. Reduce context.`
+            : `Even the highest tier that passed budget checks cannot handle this prompt size. Reduce context.`;
         result = `⛔ Pre-flight refused: ${preflight.reason}.\n\n${hint}`;
         footer = `Kai · preflight-refused · 0K in / 0K out · $0.0000 · 0t · ${elapsedSec}s`;
         auditLog(auditDb, {

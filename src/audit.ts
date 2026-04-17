@@ -60,8 +60,6 @@ export type SessionUpdateInput = {
   error?: string;
 };
 
-const TIER_RANK: Record<string, number> = { haiku: 1, sonnet: 2, opus: 3 };
-
 function envNumber(name: string, fallback?: number): number {
   const raw = process.env[name];
   if (!raw || !raw.trim()) {
@@ -76,7 +74,6 @@ function envNumber(name: string, fallback?: number): number {
 const DEFAULT_RATE_LIMIT_SENDER_PER_HOUR = 20;
 const DEFAULT_RATE_LIMIT_REPO_PER_HOUR = 100;
 const DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY = 0.25;
-const DEFAULT_ALLOWLIST_TIER = "haiku";
 
 export function initAuditDb(dbPath: string): DatabaseSync {
   const db = new DatabaseSync(dbPath);
@@ -142,13 +139,6 @@ export function initAuditDb(dbPath: string): DatabaseSync {
       used_model INTEGER NOT NULL,
       duration_ms INTEGER NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS model_allowlist (
-      sender TEXT PRIMARY KEY,
-      max_tier TEXT NOT NULL CHECK(max_tier IN ('haiku','sonnet','opus')),
-      added_at TEXT NOT NULL DEFAULT (datetime('now')),
-      added_by TEXT,
-      note TEXT
-    );
     CREATE TABLE IF NOT EXISTS rate_limits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp TEXT NOT NULL DEFAULT (datetime('now')),
@@ -160,27 +150,9 @@ export function initAuditDb(dbPath: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_rate_limits_sender_ts ON rate_limits(sender, timestamp);
     CREATE INDEX IF NOT EXISTS idx_rate_limits_repo_ts ON rate_limits(repo, timestamp)
   `);
-  seedModelAllowlist(db);
   ensureCacheSchema(db);
   ensureQualitySchema(db);
   return db;
-}
-
-function seedModelAllowlist(db: DatabaseSync): void {
-  const raw = process.env.KAI_MODEL_ALLOWLIST?.trim();
-  if (!raw) return;
-  const stmt = db.prepare(
-    `INSERT OR REPLACE INTO model_allowlist (sender, max_tier, added_by, note)
-     VALUES (?, ?, 'env-seed', 'seeded from KAI_MODEL_ALLOWLIST')`,
-  );
-  for (const entry of raw.split(",")) {
-    const [senderRaw, tierRaw] = entry.split(":").map((s) => s?.trim());
-    if (!senderRaw || !tierRaw) continue;
-    const tier = tierRaw.toLowerCase();
-    if (tier !== "haiku" && tier !== "sonnet" && tier !== "opus") continue;
-    try { stmt.run(senderRaw, tier); }
-    catch (e) { core.warning(`Allowlist seed failed for ${senderRaw}: ${e}`); }
-  }
 }
 
 export function latestAuditId(db: DatabaseSync, sender: string, repoFull: string, prNumber: number): number | null {
@@ -238,28 +210,6 @@ export function recordRateLimit(db: DatabaseSync | null, sender: string, repoFul
     db.prepare(`INSERT INTO rate_limits (sender, repo, tier, cost_usd) VALUES (?, ?, ?, ?)`)
       .run(sender, repoFull, tier, costUsd);
   } catch (e) { core.warning(`Rate-limit record failed: ${e}`); }
-}
-
-export function resolveAllowedModel(
-  db: DatabaseSync | null,
-  sender: string,
-  requestedTier: string,
-): { tier: string; downgraded: boolean; maxTier: string } {
-  const fallbackTier = (process.env.KAI_ALLOWLIST_DEFAULT_TIER ?? DEFAULT_ALLOWLIST_TIER).toLowerCase();
-  const requested = requestedTier.toLowerCase();
-  if (!db) {
-    const allowed = TIER_RANK[requested] <= TIER_RANK[fallbackTier] ? requested : fallbackTier;
-    return { tier: allowed, downgraded: allowed !== requested, maxTier: fallbackTier };
-  }
-  let maxTier = fallbackTier;
-  try {
-    const row = db.prepare(`SELECT max_tier FROM model_allowlist WHERE sender = ?`).get(sender) as { max_tier?: string } | undefined;
-    if (row?.max_tier && TIER_RANK[row.max_tier]) maxTier = row.max_tier;
-  } catch (e) {
-    core.warning(`Allowlist lookup failed for ${sender}: ${e}`);
-  }
-  const allowed = TIER_RANK[requested] <= TIER_RANK[maxTier] ? requested : maxTier;
-  return { tier: allowed, downgraded: allowed !== requested, maxTier };
 }
 
 export function sessionStart(db: DatabaseSync, data: SessionStartInput): void {

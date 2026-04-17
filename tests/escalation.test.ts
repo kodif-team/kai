@@ -83,15 +83,7 @@ test("escalation math: haiku → sonnet → opus chain", () => {
     "3K-token review on sonnet should pass");
 });
 
-test("escalation respects senderMaxTier allowlist (haiku-only user)", () => {
-  // This test doesn't directly test escalationTierSequence() since that's in
-  // index.ts and would require integration testing. But we verify that if a
-  // user is capped at haiku, there's nowhere to escalate.
-  // The escalation logic in index.ts checks: escalationTierSequence(modelTier, senderMaxTier)
-  // and only tries tiers in that sequence. A haiku-capped user would get empty sequence.
-  // This is indirectly tested by the cost-over-cap math: if even opus can't fit,
-  // the user gets a clear error message without escalation.
-
+test("highest tier still fails closed when projected cost is too high", () => {
   // Verify that opus can handle more than sonnet:
   const large = 15_000;
   const sonnetDec = preflightBudget("review this PR", large, "sonnet");
