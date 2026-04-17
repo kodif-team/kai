@@ -15,7 +15,7 @@ await Promise.all(files.map((file) => build({
   platform: "node",
   target: "node24",
   format: "esm",
+  external: ["@actions/core", "@actions/github", "@octokit/rest", "@anthropic-ai/sdk"],
   sourcemap: false,
   logLevel: "silent",
 })));
-

@@ -453,22 +453,22 @@ async function run() {
       return;
     }
 
-    // Rate-limit BEFORE spinning up the heavy CLI path — cheap deterministic guard.
-    const rateLimit = checkRateLimit(auditDb, sender, `${owner}/${repo}`);
-    if (!rateLimit.allowed) {
+    // Enforce request-frequency limits before any work that responds to @kai.
+    const frequencyLimit = checkRateLimit(auditDb, sender, `${owner}/${repo}`, { includeCostBudget: false });
+    if (!frequencyLimit.allowed) {
       const durationSec = Math.round((Date.now() - startTime) / 1000);
       const footer = buildRouterFooter(routerModel, durationSec);
       const { data: rlReply } = await octokit.issues.createComment({
         owner, repo, issue_number: issueNumber,
-        body: `> @${sender}: ${rawMessage}\n\n⛔ Rate limit hit: ${rateLimit.reason}. Try again later.\n\n---\n<sub>${footer}</sub>`,
+        body: `> @${sender}: ${rawMessage}\n\n⛔ Rate limit hit: ${frequencyLimit.reason}. Try again later.\n\n---\n<sub>${footer}</sub>`,
       });
       sessionUpdate(auditDb, runId, "completed", { status: "rate-limited", replyCommentId: rlReply.id });
       auditLog(auditDb, {
         sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
         model: routerModel, message: rawMessage, durationMs: Date.now() - startTime,
-        costUsd: 0, tokensIn: 0, tokensOut: 0, status: "rate-limited", error: rateLimit.reason,
+        costUsd: 0, tokensIn: 0, tokensOut: 0, status: "rate-limited", error: frequencyLimit.reason,
       });
-      core.warning(`Rate-limited @${sender}: ${rateLimit.reason}`);
+      core.warning(`Rate-limited @${sender}: ${frequencyLimit.reason}`);
       return;
     }
 
@@ -489,7 +489,27 @@ async function run() {
         model: "local-repo-lookup", message: rawMessage, durationMs: Date.now() - startTime,
         costUsd: 0, tokensIn: 0, tokensOut: 0, rtkSavings: "0.0%", status: "completed-local-repo-lookup",
       });
+      recordRateLimit(auditDb, sender, `${owner}/${repo}`, "local-repo-lookup", 0);
       core.info(`Local repo lookup hit: ${localLookup.hit.filePath}:${localLookup.hit.line} (${localLookup.hit.framework}); scanned=${localLookup.scannedFiles}`);
+      return;
+    }
+
+    // Paid budget guard stays immediately before the heavy CLI path.
+    const rateLimit = checkRateLimit(auditDb, sender, `${owner}/${repo}`);
+    if (!rateLimit.allowed) {
+      const durationSec = Math.round((Date.now() - startTime) / 1000);
+      const footer = buildRouterFooter(routerModel, durationSec);
+      const { data: rlReply } = await octokit.issues.createComment({
+        owner, repo, issue_number: issueNumber,
+        body: `> @${sender}: ${rawMessage}\n\n⛔ Rate limit hit: ${rateLimit.reason}. Try again later.\n\n---\n<sub>${footer}</sub>`,
+      });
+      sessionUpdate(auditDb, runId, "completed", { status: "rate-limited", replyCommentId: rlReply.id });
+      auditLog(auditDb, {
+        sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
+        model: routerModel, message: rawMessage, durationMs: Date.now() - startTime,
+        costUsd: 0, tokensIn: 0, tokensOut: 0, status: "rate-limited", error: rateLimit.reason,
+      });
+      core.warning(`Rate-limited @${sender}: ${rateLimit.reason}`);
       return;
     }
 

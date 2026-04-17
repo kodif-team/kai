@@ -8,7 +8,7 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --outfile=dist/index.js --format=cjs",
     "build:test-modules": "node scripts/build-test-modules.mjs",
-    "test:router": "npm run build && npm run build:test-modules && node --experimental-strip-types --test tests/router.test.ts tests/templates.test.ts tests/router-local-llm.test.ts tests/footer.test.ts tests/compressor.test.ts tests/context-pack.test.ts tests/pr-diff.test.ts tests/cache.test.ts tests/quality.test.ts tests/prompt-order.test.ts tests/file-focus.test.ts tests/repo-lookup.test.ts tests/cost-gates.test.ts tests/budget.test.ts",
+    "test:router": "npm run build && npm run build:test-modules && node --experimental-strip-types --test tests/router.test.ts tests/templates.test.ts tests/router-local-llm.test.ts tests/footer.test.ts tests/compressor.test.ts tests/context-pack.test.ts tests/pr-diff.test.ts tests/cache.test.ts tests/quality.test.ts tests/prompt-order.test.ts tests/file-focus.test.ts tests/repo-lookup.test.ts tests/audit.test.ts tests/cost-gates.test.ts tests/budget.test.ts",
     "test:router:live": "npm run build && npm run build:test-modules && node --experimental-strip-types --test tests/router-live-llm.test.ts tests/compressor-live.ts tests/e2e-proof.ts",
     "typecheck": "tsc --noEmit"
   },

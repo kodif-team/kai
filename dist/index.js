@@ -28653,10 +28653,11 @@ function latestAuditId(db, sender, repoFull, prNumber) {
     return null;
   }
 }
-function checkRateLimit(db, sender, repoFull) {
+function checkRateLimit(db, sender, repoFull, options = {}) {
   const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR", DEFAULT_RATE_LIMIT_SENDER_PER_HOUR);
   const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR", DEFAULT_RATE_LIMIT_REPO_PER_HOUR);
   const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY);
+  const includeCostBudget = options.includeCostBudget ?? true;
   if (!db) return { allowed: false, reason: "rate-limit database unavailable" };
   try {
     const hourly = db.prepare(
@@ -28671,11 +28672,13 @@ function checkRateLimit(db, sender, repoFull) {
     if (repoHourly.n >= repoPerHour) {
       return { allowed: false, reason: `repo rate limit: ${repoHourly.n}/${repoPerHour} calls in last hour` };
     }
-    const dailyCost = db.prepare(
-      `SELECT COALESCE(SUM(cost_usd), 0) AS c FROM rate_limits WHERE sender = ? AND timestamp >= datetime('now', '-1 day')`
-    ).get(sender);
-    if (dailyCost.c >= senderCostPerDay) {
-      return { allowed: false, reason: `sender daily budget: $${dailyCost.c.toFixed(2)}/$${senderCostPerDay}` };
+    if (includeCostBudget) {
+      const dailyCost = db.prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS c FROM rate_limits WHERE sender = ? AND timestamp >= datetime('now', '-1 day')`
+      ).get(sender);
+      if (dailyCost.c >= senderCostPerDay) {
+        return { allowed: false, reason: `sender daily budget: $${dailyCost.c.toFixed(2)}/$${senderCostPerDay}` };
+      }
     }
     return { allowed: true };
   } catch (e) {
@@ -29694,8 +29697,8 @@ ${template}
       core3.info(`Template reply by local router (${routerModel})`);
       return;
     }
-    const rateLimit = checkRateLimit(auditDb, sender, `${owner}/${repo}`);
-    if (!rateLimit.allowed) {
+    const frequencyLimit = checkRateLimit(auditDb, sender, `${owner}/${repo}`, { includeCostBudget: false });
+    if (!frequencyLimit.allowed) {
       const durationSec = Math.round((Date.now() - startTime) / 1e3);
       const footer2 = buildRouterFooter(routerModel, durationSec);
       const { data: rlReply } = await octokit.issues.createComment({
@@ -29704,7 +29707,7 @@ ${template}
         issue_number: issueNumber,
         body: `> @${sender}: ${rawMessage}
 
-\u26D4 Rate limit hit: ${rateLimit.reason}. Try again later.
+\u26D4 Rate limit hit: ${frequencyLimit.reason}. Try again later.
 
 ---
 <sub>${footer2}</sub>`
@@ -29721,9 +29724,9 @@ ${template}
         tokensIn: 0,
         tokensOut: 0,
         status: "rate-limited",
-        error: rateLimit.reason
+        error: frequencyLimit.reason
       });
-      core3.warning(`Rate-limited @${sender}: ${rateLimit.reason}`);
+      core3.warning(`Rate-limited @${sender}: ${frequencyLimit.reason}`);
       return;
     }
     const localLookup = answerRepoLookup(userMessage);
@@ -29758,7 +29761,40 @@ ${localLookup.answer}
         rtkSavings: "0.0%",
         status: "completed-local-repo-lookup"
       });
+      recordRateLimit(auditDb, sender, `${owner}/${repo}`, "local-repo-lookup", 0);
       core3.info(`Local repo lookup hit: ${localLookup.hit.filePath}:${localLookup.hit.line} (${localLookup.hit.framework}); scanned=${localLookup.scannedFiles}`);
+      return;
+    }
+    const rateLimit = checkRateLimit(auditDb, sender, `${owner}/${repo}`);
+    if (!rateLimit.allowed) {
+      const durationSec = Math.round((Date.now() - startTime) / 1e3);
+      const footer2 = buildRouterFooter(routerModel, durationSec);
+      const { data: rlReply } = await octokit.issues.createComment({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body: `> @${sender}: ${rawMessage}
+
+\u26D4 Rate limit hit: ${rateLimit.reason}. Try again later.
+
+---
+<sub>${footer2}</sub>`
+      });
+      sessionUpdate(auditDb, runId, "completed", { status: "rate-limited", replyCommentId: rlReply.id });
+      auditLog(auditDb, {
+        sender,
+        repo: `${owner}/${repo}`,
+        prNumber: issueNumber,
+        model: routerModel,
+        message: rawMessage,
+        durationMs: Date.now() - startTime,
+        costUsd: 0,
+        tokensIn: 0,
+        tokensOut: 0,
+        status: "rate-limited",
+        error: rateLimit.reason
+      });
+      core3.warning(`Rate-limited @${sender}: ${rateLimit.reason}`);
       return;
     }
     requireClaudeCLI();

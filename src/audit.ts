@@ -5,6 +5,7 @@ import { ensureCacheSchema } from "./cache";
 import { ensureQualitySchema, detectAndRecordFollowup, recordCacheHit, recordCommitVerification } from "./quality";
 
 export type RateLimitCheck = { allowed: boolean; reason?: string };
+export type RateLimitOptions = { includeCostBudget?: boolean };
 
 export type AuditDb = DatabaseSync;
 
@@ -192,10 +193,16 @@ export function latestAuditId(db: DatabaseSync, sender: string, repoFull: string
   } catch { return null; }
 }
 
-export function checkRateLimit(db: DatabaseSync | null, sender: string, repoFull: string): RateLimitCheck {
+export function checkRateLimit(
+  db: DatabaseSync | null,
+  sender: string,
+  repoFull: string,
+  options: RateLimitOptions = {},
+): RateLimitCheck {
   const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR", DEFAULT_RATE_LIMIT_SENDER_PER_HOUR);
   const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR", DEFAULT_RATE_LIMIT_REPO_PER_HOUR);
   const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY);
+  const includeCostBudget = options.includeCostBudget ?? true;
   if (!db) return { allowed: false, reason: "rate-limit database unavailable" };
   try {
     const hourly = db.prepare(
@@ -210,11 +217,13 @@ export function checkRateLimit(db: DatabaseSync | null, sender: string, repoFull
     if (repoHourly.n >= repoPerHour) {
       return { allowed: false, reason: `repo rate limit: ${repoHourly.n}/${repoPerHour} calls in last hour` };
     }
-    const dailyCost = db.prepare(
-      `SELECT COALESCE(SUM(cost_usd), 0) AS c FROM rate_limits WHERE sender = ? AND timestamp >= datetime('now', '-1 day')`,
-    ).get(sender) as { c: number };
-    if (dailyCost.c >= senderCostPerDay) {
-      return { allowed: false, reason: `sender daily budget: $${dailyCost.c.toFixed(2)}/$${senderCostPerDay}` };
+    if (includeCostBudget) {
+      const dailyCost = db.prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS c FROM rate_limits WHERE sender = ? AND timestamp >= datetime('now', '-1 day')`,
+      ).get(sender) as { c: number };
+      if (dailyCost.c >= senderCostPerDay) {
+        return { allowed: false, reason: `sender daily budget: $${dailyCost.c.toFixed(2)}/$${senderCostPerDay}` };
+      }
     }
     return { allowed: true };
   } catch (e) {
