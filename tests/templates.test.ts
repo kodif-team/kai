@@ -23,5 +23,6 @@ test("uses identity template for meta-template intent", () => {
 test("uses off-topic template for spam-abuse intent", () => {
   const route = fakeRoute("spam-abuse", "reply-template");
   assert.equal(templateForRoute(route), OFFTOPIC_TEMPLATE);
-  assert.match(templateForRoute(route), /development work related to our platform/);
+  assert.match(templateForRoute(route), /Kodif development work/);
+  assert.match(templateForRoute(route), /code review|architecture questions|bug fixes/);
 });
