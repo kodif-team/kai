@@ -29167,9 +29167,9 @@ async function getPRCommentsContext(octokit, owner, repo, issueNumber, maxCommen
     return "";
   }
 }
-var rawLogLevel = process.env.KAI_LOG_LEVEL;
-if (!rawLogLevel) throw new Error("KAI_LOG_LEVEL is required");
-var log = createLogger2("kai-action", rawLogLevel);
+var rawLogLevel = (process.env.KAI_LOG_LEVEL || "info").toLowerCase();
+var safeLogLevel = rawLogLevel === "debug" || rawLogLevel === "warn" || rawLogLevel === "error" ? rawLogLevel : "info";
+var log = createLogger2("kai-action", safeLogLevel);
 var MODELS = {
   haiku: { id: "claude-haiku-4-5-20251001", label: "Haiku" },
   sonnet: { id: "claude-sonnet-4-20250514", label: "Sonnet" },

@@ -8,7 +8,6 @@ export type RouterIntent =
   | "review"
   | "write-fix"
   | "commit-write"
-  | "job-candidate"
   | "alert"
   | "spam-abuse"
   | "unsupported";

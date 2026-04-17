@@ -30,6 +30,7 @@ export type HeartbeatContext = {
   modelLabel: string;
 };
 
+
 type CliJsonPayload = {
   result?: string;
   content?: string;

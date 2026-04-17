@@ -58,9 +58,9 @@ async function getPRCommentsContext(
   }
 }
 
-const rawLogLevel = process.env.KAI_LOG_LEVEL;
-if (!rawLogLevel) throw new Error("KAI_LOG_LEVEL is required");
-const log = createLogger("kai-action", rawLogLevel as "debug" | "info" | "warn" | "error");
+const rawLogLevel = (process.env.KAI_LOG_LEVEL || "info").toLowerCase();
+const safeLogLevel = rawLogLevel === "debug" || rawLogLevel === "warn" || rawLogLevel === "error" ? rawLogLevel : "info";
+const log = createLogger("kai-action", safeLogLevel);
 
 const MODELS: Record<string, { id: string; label: string }> = {
   haiku:  { id: "claude-haiku-4-5-20251001",  label: "Haiku" },

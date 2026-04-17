@@ -74,7 +74,7 @@ export function routeEvent(rawMessage: string, modelTier: string): RouterDecisio
 
 const ROUTER_INTENTS: RouterIntent[] = [
   "stop", "meta-template", "needs-input", "simple-answer",
-  "review", "write-fix", "commit-write", "job-candidate",
+  "review", "write-fix", "commit-write",
   "alert", "spam-abuse", "unsupported",
 ];
 
@@ -166,7 +166,7 @@ type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 function localRouterMessages(message: string): ChatMessage[] {
   return [{
     role: "user",
-    content: `Classify PR comment. Intents: simple-answer|review|write-fix|commit-write|job-candidate|meta-template|spam-abuse|needs-input|stop|alert|unsupported.
+    content: `Classify PR comment. Intents: simple-answer|review|write-fix|commit-write|meta-template|spam-abuse|needs-input|stop|alert|unsupported.
 Rules: "stop"→stop; "who are you"/help→meta-template; weather/music/jokes→spam-abuse; empty/vague→needs-input; "commit"/"push"→commit-write; imperative add/fix/update→write-fix; review/bug/risk→review; question→simple-answer.
 Return {"intent":"..."}.
 Comment: ${JSON.stringify(message)}`,

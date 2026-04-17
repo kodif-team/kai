@@ -104,3 +104,4 @@ Delete Kai's working comment to cancel a running job.
 | `trigger_phrase` | No | `@kai` | Trigger phrase |
 | `router_url` | No | — | Local LLM router URL (OpenAI-compatible); required before paid model calls |
 | `router_model` | No | `LFM2-350M` | Local router classifier model |
+ё
