@@ -28781,8 +28781,10 @@ async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
   if (endpoints.length === 0) return;
   const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
   if (probes.every(Boolean)) return;
+  const actionPath = process.env.GITHUB_ACTION_PATH;
   const composeCandidates = [
     process.env.KAI_COMPOSE_FILE,
+    actionPath ? `${actionPath}/docker-compose.router.yml` : "",
     "/home/kai/kai-router/docker-compose.router.yml",
     "/home/kai/docker-compose.router.yml",
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`
@@ -28796,6 +28798,14 @@ async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
   const composeFile = composeCandidates[0];
   core.info(`Local LLM unhealthy \u2014 starting containers via ${composeFile}`);
   try {
+    (0, import_node_child_process.execSync)(
+      `docker compose -f ${shellQuote(composeFile)} run --rm kai-router-pull`,
+      { stdio: "pipe", timeout: 18e4 }
+    );
+    (0, import_node_child_process.execSync)(
+      `docker compose -f ${shellQuote(composeFile)} run --rm kai-compressor-pull`,
+      { stdio: "pipe", timeout: 18e4 }
+    );
     (0, import_node_child_process.execSync)(
       `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
       { stdio: "pipe", timeout: 6e4 }

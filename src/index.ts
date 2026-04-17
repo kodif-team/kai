@@ -432,8 +432,13 @@ async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Pr
   const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
   if (probes.every(Boolean)) return; // everything already up
 
+  // GITHUB_ACTION_PATH points to the action's own checkout on the runner —
+  // docker-compose.router.yml ships with the action, so this works out of the
+  // box with zero runner-side setup required.
+  const actionPath = process.env.GITHUB_ACTION_PATH;
   const composeCandidates = [
     process.env.KAI_COMPOSE_FILE,
+    actionPath ? `${actionPath}/docker-compose.router.yml` : "",
     "/home/kai/kai-router/docker-compose.router.yml",
     "/home/kai/docker-compose.router.yml",
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`,
@@ -449,6 +454,16 @@ async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Pr
   const composeFile = composeCandidates[0];
   core.info(`Local LLM unhealthy — starting containers via ${composeFile}`);
   try {
+    // Model pull jobs are idempotent (check-then-skip) — ~200ms when cached,
+    // ~15s on first boot of a runner.
+    execSync(
+      `docker compose -f ${shellQuote(composeFile)} run --rm kai-router-pull`,
+      { stdio: "pipe", timeout: 180_000 },
+    );
+    execSync(
+      `docker compose -f ${shellQuote(composeFile)} run --rm kai-compressor-pull`,
+      { stdio: "pipe", timeout: 180_000 },
+    );
     execSync(
       `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
       { stdio: "pipe", timeout: 60_000 },
