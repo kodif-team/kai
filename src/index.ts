@@ -5,6 +5,7 @@ import { execSync, spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { compressPromptWithQwen, estimateTokens } from "./compressor";
+import { countInputTokens } from "./token-counter";
 import { appendContextHistory, buildDynamicPromptFromManifest, createDynamicContextPack } from "./context-pack";
 import { buildFooter, buildRouterFooter } from "./footer";
 import { isMetaQuestion, routeEventWithLocalLLM, shouldVerifyCommit, suggestTierWithLocalLLM, type RouterDecision } from "./router";
@@ -733,7 +734,12 @@ async function run() {
       }
       // FIRST LAW: single place that enforces budget before any external API
       // call. Runs all per-tier, prompt-size, and worst-case cost checks.
-      const finalPromptTokens = estimateTokens(finalPrompt);
+      // Token count is authoritative via Anthropic's /v1/messages/count_tokens
+      // endpoint; on failure it falls back to the character-ratio heuristic so
+      // preflight never hard-fails on a transient network blip.
+      const tokenCount = await countInputTokens(anthropicApiKey, selectedModel.id, finalPrompt);
+      const finalPromptTokens = tokenCount.tokens;
+      core.info(`Prompt tokens: ${finalPromptTokens} (source: ${tokenCount.source}, ${tokenCount.durationMs}ms)`);
       let activeTier = modelTier;
       let activeModel = selectedModel;
       let preflight = preflightBudget(userMessage, finalPromptTokens, activeTier);
