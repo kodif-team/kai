@@ -46,8 +46,8 @@ test("getMaxTurns caps short-answer at 1 turn", () => {
   // paying repeated fixed tool/system overhead.
   assert.equal(getMaxTurns("what is the biggest risk? one sentence.", "haiku"), 1);
   assert.equal(getMaxTurns("briefly describe the diff", "haiku"), 1);
-  // Review on haiku is limited to 3 turns to stay under $0.05 cap
-  assert.equal(getMaxTurns("review this PR", "haiku"), 3);
+  // Review on haiku is limited to 2 turns to stay under $0.05 cap
+  assert.equal(getMaxTurns("review this PR", "haiku"), 2);
   // Write requests override haiku limits; they still get 20 turns
   assert.equal(getMaxTurns("fix the failing test in auth.py", "haiku"), 20);
 });
