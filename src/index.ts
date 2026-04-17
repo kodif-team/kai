@@ -1330,7 +1330,10 @@ async function run() {
     } catch { /* audit itself should never crash the handler */ }
 
     if (octokit && owner && repo) {
-      const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}\n\n⚠️ **Kai error:**\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\nCheck runner logs or contact infra team.\n\n---\n<sub>Kai (Kodif AI)</sub>`;
+      const routerHint = msg.includes("local router")
+        ? "\n\n**Likely cause:** local router (LFM2-350M on port 11434) is not reachable from the runner. On the runner, run `docker compose -f docker-compose.router.yml ps` — if containers are Exited, start with `docker compose -f docker-compose.router.yml up -d kai-router-llm kai-compressor-llm`."
+        : "";
+      const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}\n\n⚠️ **Kai error:**\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`${routerHint}\n\nCheck runner logs or contact infra team.\n\n---\n<sub>Kai (Kodif AI)</sub>`;
       try {
         if (replyCommentId) {
           await safeUpdate(octokit, owner, repo, replyCommentId, errorBody);

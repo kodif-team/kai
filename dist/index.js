@@ -29667,12 +29667,13 @@ ${result}
     } catch {
     }
     if (octokit && owner && repo) {
+      const routerHint = msg.includes("local router") ? "\n\n**Likely cause:** local router (LFM2-350M on port 11434) is not reachable from the runner. On the runner, run `docker compose -f docker-compose.router.yml ps` \u2014 if containers are Exited, start with `docker compose -f docker-compose.router.yml up -d kai-router-llm kai-compressor-llm`." : "";
       const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}
 
 \u26A0\uFE0F **Kai error:**
 \`\`\`
 ${msg.slice(0, 500)}
-\`\`\`
+\`\`\`${routerHint}
 
 Check runner logs or contact infra team.
 
