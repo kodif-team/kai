@@ -28775,12 +28775,46 @@ async function probeHealth(url, timeoutMs = 1500) {
     clearTimeout(t);
   }
 }
+var runnerDiagnosticsEmitted = false;
+function emitRunnerDiagnostics(routerUrl, compressorUrl) {
+  if (runnerDiagnosticsEmitted) return;
+  runnerDiagnosticsEmitted = true;
+  const tryRun = (label, cmd, timeoutMs = 5e3) => {
+    try {
+      const out = (0, import_node_child_process.execSync)(cmd, { stdio: "pipe", timeout: timeoutMs, encoding: "utf-8" }).trim();
+      core.info(`[diag] ${label}: ${out.slice(0, 600)}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      core.info(`[diag] ${label}: ERROR ${msg}`);
+    }
+  };
+  core.info("===== runner diagnostics =====");
+  tryRun("uname", "uname -a");
+  tryRun("whoami", "whoami && id");
+  tryRun("cwd", "pwd");
+  tryRun("PATH", "echo $PATH");
+  tryRun("HOME", "echo $HOME");
+  tryRun("docker-cli", "command -v docker || echo not-found");
+  tryRun("docker-sock", "ls -la /var/run/docker.sock 2>/dev/null || echo no-socket");
+  tryRun("listening-ports", "(ss -tln 2>/dev/null || netstat -tln 2>/dev/null || echo no-ss) | head -20");
+  tryRun("processes-listening", "lsof -iTCP -sTCP:LISTEN 2>/dev/null | head -20 || echo no-lsof");
+  tryRun("action-path-ls", "ls -la /home/runner/actions-runner/_work/_actions/er-zhi/kai/v1 2>/dev/null | head -10 || echo not-found");
+  tryRun("bundleDir-ls", "ls -la $(dirname $(node -e 'console.log(process.argv[1])' 2>/dev/null || echo /))/.. 2>/dev/null | head -10 || echo not-found");
+  if (routerUrl) {
+    tryRun(`curl ${routerUrl}/health`, `curl -sS -v --max-time 5 ${routerUrl.replace(/\/$/, "")}/health 2>&1 | tail -30`);
+  }
+  if (compressorUrl) {
+    tryRun(`curl ${compressorUrl}/health`, `curl -sS -v --max-time 5 ${compressorUrl.replace(/\/$/, "")}/health 2>&1 | tail -30`);
+  }
+  core.info("===== /runner diagnostics =====");
+}
 async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
   if (process.env.KAI_LLM_AUTOSTART === "false") return;
   const endpoints = [routerUrl, compressorUrl].filter((u) => !!u);
   if (endpoints.length === 0) return;
   const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
   if (probes.every(Boolean)) return;
+  emitRunnerDiagnostics(routerUrl, compressorUrl);
   const bundleDir = typeof __dirname === "string" ? __dirname : "";
   const composeCandidates = [
     process.env.KAI_COMPOSE_FILE,

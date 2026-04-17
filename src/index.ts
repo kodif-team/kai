@@ -418,6 +418,44 @@ async function probeHealth(url: string, timeoutMs = 1500): Promise<boolean> {
   finally { clearTimeout(t); }
 }
 
+// Dumps the runner's shell environment to the workflow log so operators can
+// diagnose self-hosted runner issues without SSH (we don't have SSH from this
+// sandbox). Read-only. Cheap. Runs once per invocation when the LLM endpoints
+// are unreachable.
+let runnerDiagnosticsEmitted = false;
+function emitRunnerDiagnostics(routerUrl?: string, compressorUrl?: string): void {
+  if (runnerDiagnosticsEmitted) return;
+  runnerDiagnosticsEmitted = true;
+  const tryRun = (label: string, cmd: string, timeoutMs = 5000) => {
+    try {
+      const out = execSync(cmd, { stdio: "pipe", timeout: timeoutMs, encoding: "utf-8" }).trim();
+      core.info(`[diag] ${label}: ${out.slice(0, 600)}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      core.info(`[diag] ${label}: ERROR ${msg}`);
+    }
+  };
+  core.info("===== runner diagnostics =====");
+  tryRun("uname", "uname -a");
+  tryRun("whoami", "whoami && id");
+  tryRun("cwd", "pwd");
+  tryRun("PATH", "echo $PATH");
+  tryRun("HOME", "echo $HOME");
+  tryRun("docker-cli", "command -v docker || echo not-found");
+  tryRun("docker-sock", "ls -la /var/run/docker.sock 2>/dev/null || echo no-socket");
+  tryRun("listening-ports", "(ss -tln 2>/dev/null || netstat -tln 2>/dev/null || echo no-ss) | head -20");
+  tryRun("processes-listening", "lsof -iTCP -sTCP:LISTEN 2>/dev/null | head -20 || echo no-lsof");
+  tryRun("action-path-ls", "ls -la /home/runner/actions-runner/_work/_actions/er-zhi/kai/v1 2>/dev/null | head -10 || echo not-found");
+  tryRun("bundleDir-ls", "ls -la $(dirname $(node -e 'console.log(process.argv[1])' 2>/dev/null || echo /))/.. 2>/dev/null | head -10 || echo not-found");
+  if (routerUrl) {
+    tryRun(`curl ${routerUrl}/health`, `curl -sS -v --max-time 5 ${routerUrl.replace(/\/$/, "")}/health 2>&1 | tail -30`);
+  }
+  if (compressorUrl) {
+    tryRun(`curl ${compressorUrl}/health`, `curl -sS -v --max-time 5 ${compressorUrl.replace(/\/$/, "")}/health 2>&1 | tail -30`);
+  }
+  core.info("===== /runner diagnostics =====");
+}
+
 // Self-heal the local LLM containers when they're down at action start. Uses
 // docker compose on the runner — requires: (1) the kai user in the docker
 // group, (2) docker-compose.router.yml placed somewhere the runner can read
@@ -431,6 +469,9 @@ async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Pr
 
   const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
   if (probes.every(Boolean)) return; // everything already up
+
+  // Dump the runner's environment so we can diagnose without SSH.
+  emitRunnerDiagnostics(routerUrl, compressorUrl);
 
   // __dirname of the bundle is <action>/dist/; the compose file ships one level
   // up. GITHUB_ACTION_PATH is only set for composite actions, not JS actions,
