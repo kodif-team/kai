@@ -28855,7 +28855,7 @@ function getMaxTurns(message, modelTier) {
   if (modelTier === "sonnet") return 20;
   if (isImperativeWriteRequest(message)) return 20;
   if (isShortAnswerRequest(message)) return 1;
-  if (modelTier === "haiku" && /\b(review|refactor)\b/i.test(message)) return 2;
+  if (modelTier === "haiku" && /\b(review|refactor)\b/i.test(message)) return 1;
   const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
   return isTrulySimple ? 8 : 12;
 }
