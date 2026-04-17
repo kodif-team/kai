@@ -56,7 +56,8 @@ test("getMaxTurns does not treat 'after ... fix' as an edit command", () => {
   // Regression: validation pings like "validate after env_file fix" were
   // misclassified as edit requests (20 turns), inflating worst-case cost and
   // causing preflight refusal under haiku cap.
-  assert.equal(getMaxTurns("validate after env_file fix", "haiku"), 12);
+  assert.equal(getMaxTurns("validate after env_file fix", "haiku"), 3);
+  assert.equal(getMaxTurns("final health check after db-permission fix", "sonnet"), 4);
 });
 
 test("getMaxTurns keeps repo location questions cheap", () => {

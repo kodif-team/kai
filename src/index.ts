@@ -269,7 +269,9 @@ function buildCLIPrompt(
       ? `Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.`
       : shortAnswer
         ? `This is a short-answer task. Produce the final one-sentence answer now. Do NOT open any file.`
-        : `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.`,
+        : route.commitExpected
+          ? `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.`
+          : `Read-only task. Do NOT edit files, commit, or push. Satisfy the task from the selected context and report concrete evidence. Answer EXACTLY what the user asked.`,
   );
 
   return buildCacheFriendlyPrompt({ stable, dynamic });

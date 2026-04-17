@@ -2,6 +2,7 @@
 // on a paid call MUST live here so tests can exercise the exact algebra.
 //
 // FIRST LAW: we must not spend real money on a call we already expect to fail.
+import { isReadOnlyValidationRequest } from "./request-kind";
 
 export const PRICING_USD_PER_MILLION: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }> = {
   // Claude Haiku 4.5 (ballpark — tune as Anthropic publishes updates).
@@ -41,10 +42,11 @@ function isImperativeWriteRequest(message: string): boolean {
 }
 
 export function getMaxTurns(message: string, modelTier: string): number {
+  if (isShortAnswerRequest(message)) return 1;
+  if (isReadOnlyValidationRequest(message)) return modelTier === "sonnet" ? 4 : 3;
   if (modelTier === "opus") return 25;
   if (modelTier === "sonnet") return 20;
   if (isImperativeWriteRequest(message)) return 20;
-  if (isShortAnswerRequest(message)) return 1;
   // Haiku is budget-constrained — review/refactor tasks use 2 turns to stay under $0.05 cap
   if (modelTier === "haiku" && /\b(review|refactor)\b/i.test(message)) return 2;
   const isTrulySimple = message.length < 80

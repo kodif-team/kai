@@ -54,6 +54,30 @@ liveTest("write-fix intent → call-model + commitExpected derived in code", asy
   }
 });
 
+liveTest("health check stays read-only even if local LLM says write-fix", async () => {
+  const llm = await startFakeLLM(JSON.stringify({ intent: "write-fix" }));
+  try {
+    const route = await routeEventWithLocalLLM("final health check after db-permission fix", "sonnet", { url: llm.url });
+    assert.equal(route.source, "local-llm");
+    assert.equal(route.intent, "review");
+    assert.equal(route.decision, "call-model");
+    assert.equal(route.commitExpected, false);
+  } finally {
+    await llm.close();
+  }
+});
+
+liveTest("explicit fix request still allows commit flow", async () => {
+  const llm = await startFakeLLM(JSON.stringify({ intent: "write-fix" }));
+  try {
+    const route = await routeEventWithLocalLLM("fix the db-permission issue and commit", "sonnet", { url: llm.url });
+    assert.equal(route.intent, "write-fix");
+    assert.equal(route.commitExpected, true);
+  } finally {
+    await llm.close();
+  }
+});
+
 liveTest("meta-template intent → reply-template derived in code", async () => {
   const llm = await startFakeLLM(JSON.stringify({ intent: "meta-template" }));
   try {

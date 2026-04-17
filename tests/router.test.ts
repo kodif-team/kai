@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isMetaQuestion, normalizeWhitespace, routeEvent, shouldVerifyCommit } from "../dist/router.js";
+import { isMetaQuestion, normalizeIntent, normalizeWhitespace, routeEvent, shouldVerifyCommit } from "../dist/router.js";
 
 test("normalizes whitespace", () => {
   assert.equal(normalizeWhitespace("  add   README\n sentence\t now  "), "add README sentence now");
@@ -26,6 +26,14 @@ test("shouldVerifyCommit helper recognizes imperative write tasks", () => {
   assert.equal(shouldVerifyCommit("add one README sentence"), true);
   assert.equal(shouldVerifyCommit("fix docs, commit and push"), true);
   assert.equal(shouldVerifyCommit("can you add README?"), false);
+  assert.equal(shouldVerifyCommit("final health check after db-permission fix"), false);
+  assert.equal(shouldVerifyCommit("verify server after db-permission fix"), false);
+});
+
+test("health check normalizes write-fix misclassification to read-only review", () => {
+  assert.equal(normalizeIntent("write-fix", "final health check after db-permission fix"), "review");
+  assert.equal(normalizeIntent("commit-write", "verify server after db-permission fix"), "review");
+  assert.equal(normalizeIntent("write-fix", "fix the db-permission issue and commit"), "write-fix");
 });
 
 test("isMetaQuestion helper recognizes identity questions", () => {

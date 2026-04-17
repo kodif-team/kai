@@ -27936,6 +27936,15 @@ function buildRouterFooter(routerModel, durationSec) {
   return `Kai \xB7 local LLM (${routerModel}) \xB7 RTK 0% \xB7 cache 0% \xB7 0 in / 0 out \xB7 $0 \xB7 0t \xB7 ${durationSec}s \xB7 deeper analysis: unavailable`;
 }
 
+// src/request-kind.ts
+function isReadOnlyValidationRequest(message) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  const asksToChange = /^(fix|commit|push|apply|create|patch|refactor|document|write|change|remove|delete)\b/.test(normalized) || /\b(commit|push)\b/i.test(normalized);
+  if (asksToChange) return false;
+  return /\b(health\s*check|final\s+health\s*check|check\s+(?:logs?|status|server|runner|container|health)|verify|validate|smoke\s*test)\b/i.test(normalized);
+}
+
 // src/router.ts
 function normalizeWhitespace(message) {
   return message.replace(/\s+/g, " ").trim();
@@ -27944,6 +27953,7 @@ function isMetaQuestion(msg) {
   return /^(who are you|what are you|how to use|help|what can you do|кто ты|как пользоваться)/i.test(msg);
 }
 function shouldVerifyCommit(message) {
+  if (isReadOnlyValidationRequest(message)) return false;
   if (/\b(commit|push)\b/i.test(message)) return true;
   const trimmed = message.trim();
   const isQuestion = /\?$/.test(trimmed) || /^(can|could|should|would|is|are|do|does|what|who|why|how)\b/i.test(trimmed);
@@ -28055,6 +28065,9 @@ function decisionForIntent(intent) {
   }
 }
 function normalizeIntent(intent, message) {
+  if ((intent === "write-fix" || intent === "commit-write") && isReadOnlyValidationRequest(message)) {
+    return "review";
+  }
   if ((intent === "write-fix" || intent === "commit-write") && !shouldVerifyCommit(message)) {
     return "simple-answer";
   }
@@ -28134,6 +28147,7 @@ review = asks to assess code, PR changes, bugs, risks, security, correctness, or
 write-fix = asks to change code, edit files, patch, fix, add, refactor, commit, or push.
 meta-template = asks who Kai is, help, usage, or capabilities.
 spam-abuse = unrelated or abusive. needs-input = too vague to act. stop = asks to stop.
+Health checks, log checks, status checks, validate, verify, and smoke tests are review unless the user explicitly asks to change/commit/push.
 If a comment mentions PR code, bugs, security, risk, or vulnerabilities, never use meta-template.
 If "start/starts" means where an app begins/runs, use simple-answer unless the user asks to change code.
 Comment: ${JSON.stringify(message)}`
@@ -28828,10 +28842,11 @@ function isImperativeWriteRequest(message) {
   return /^(fix|commit|push|apply|create|patch|refactor|document)\b/.test(normalized);
 }
 function getMaxTurns(message, modelTier) {
+  if (isShortAnswerRequest(message)) return 1;
+  if (isReadOnlyValidationRequest(message)) return modelTier === "sonnet" ? 4 : 3;
   if (modelTier === "opus") return 25;
   if (modelTier === "sonnet") return 20;
   if (isImperativeWriteRequest(message)) return 20;
-  if (isShortAnswerRequest(message)) return 1;
   if (modelTier === "haiku" && /\b(review|refactor)\b/i.test(message)) return 2;
   const isTrulySimple = message.length < 80 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
   return isTrulySimple ? 8 : 12;
@@ -29463,7 +29478,7 @@ ${KODIF_ARCH_CONTEXT}`);
 ${prCommentsContext}`);
   dynamic.push(
     `Task: ${userMessage}`,
-    archTask ? `Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.` : shortAnswer ? `This is a short-answer task. Produce the final one-sentence answer now. Do NOT open any file.` : `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.`
+    archTask ? `Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.` : shortAnswer ? `This is a short-answer task. Produce the final one-sentence answer now. Do NOT open any file.` : route.commitExpected ? `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.` : `Read-only task. Do NOT edit files, commit, or push. Satisfy the task from the selected context and report concrete evidence. Answer EXACTLY what the user asked.`
   );
   return buildCacheFriendlyPrompt({ stable, dynamic });
 }

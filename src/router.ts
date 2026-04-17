@@ -1,6 +1,7 @@
 export type { RouterDecision, RouterIntent } from "./types";
 import type { ModelTier, RouterDecision, RouterIntent } from "./types";
 import { isRecord, parseJsonObject } from "./json";
+import { isReadOnlyValidationRequest } from "./request-kind";
 
 export function normalizeWhitespace(message: string): string {
   return message.replace(/\s+/g, " ").trim();
@@ -12,6 +13,7 @@ export function isMetaQuestion(msg: string): boolean {
 }
 
 export function shouldVerifyCommit(message: string): boolean {
+  if (isReadOnlyValidationRequest(message)) return false;
   if (/\b(commit|push)\b/i.test(message)) return true;
   const trimmed = message.trim();
   const isQuestion = /\?$/.test(trimmed) || /^(can|could|should|would|is|are|do|does|what|who|why|how)\b/i.test(trimmed);
@@ -88,7 +90,10 @@ function decisionForIntent(intent: RouterIntent): RouterDecision["decision"] {
   }
 }
 
-function normalizeIntent(intent: RouterIntent, message: string): RouterIntent {
+export function normalizeIntent(intent: RouterIntent, message: string): RouterIntent {
+  if ((intent === "write-fix" || intent === "commit-write") && isReadOnlyValidationRequest(message)) {
+    return "review";
+  }
   if ((intent === "write-fix" || intent === "commit-write") && !shouldVerifyCommit(message)) {
     return "simple-answer";
   }
@@ -180,6 +185,7 @@ review = asks to assess code, PR changes, bugs, risks, security, correctness, or
 write-fix = asks to change code, edit files, patch, fix, add, refactor, commit, or push.
 meta-template = asks who Kai is, help, usage, or capabilities.
 spam-abuse = unrelated or abusive. needs-input = too vague to act. stop = asks to stop.
+Health checks, log checks, status checks, validate, verify, and smoke tests are review unless the user explicitly asks to change/commit/push.
 If a comment mentions PR code, bugs, security, risk, or vulnerabilities, never use meta-template.
 If "start/starts" means where an app begins/runs, use simple-answer unless the user asks to change code.
 Comment: ${JSON.stringify(message)}`,
