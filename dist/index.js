@@ -28824,29 +28824,75 @@ async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
     "/home/kai/docker-compose.router.yml",
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`
   ].filter((p) => !!p && (0, import_node_fs2.existsSync)(p));
-  if (composeCandidates.length === 0) {
-    core.warning(
-      "Local LLM is down and no docker-compose.router.yml found on the runner. Place it at /home/kai/kai-router/ or set KAI_COMPOSE_FILE."
-    );
-    return;
+  if ((0, import_node_fs2.existsSync)("/var/run/docker.sock")) {
+    try {
+      const filters = encodeURIComponent(JSON.stringify({ name: ["kai-router", "kai-compressor"] }));
+      const raw = (0, import_node_child_process.execSync)(
+        `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&filters=${filters}'`,
+        { stdio: "pipe", timeout: 1e4, encoding: "utf-8" }
+      );
+      const containers = JSON.parse(raw);
+      if (containers.length === 0) {
+        core.warning("[diag] docker API: no kai-router/kai-compressor containers exist on this host");
+      } else {
+        for (const c of containers) {
+          const name = (c.Names[0] || "").replace(/^\//, "");
+          core.info(`[diag] container ${name}: state=${c.State} status=${c.Status} image=${c.Image}`);
+          try {
+            const logs = (0, import_node_child_process.execSync)(
+              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/logs?stdout=1&stderr=1&tail=80&timestamps=1' 2>&1 | tr -d '\\0' | tr -c '[:print:][:space:]' '.'`,
+              { stdio: "pipe", timeout: 1e4, encoding: "utf-8" }
+            );
+            core.info(`[diag] ${name} last 80 lines:
+${logs.slice(-4e3)}`);
+          } catch (e) {
+            core.info(`[diag] ${name} logs fetch error: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+          }
+          try {
+            const inspect = (0, import_node_child_process.execSync)(
+              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/json' 2>&1`,
+              { stdio: "pipe", timeout: 1e4, encoding: "utf-8" }
+            );
+            const parsed = JSON.parse(inspect);
+            core.info(`[diag] ${name} inspect: restartCount=${parsed.RestartCount ?? "?"} exit=${parsed.State?.ExitCode ?? "?"} oom=${parsed.State?.OOMKilled ?? "?"} health=${parsed.State?.Health?.Status ?? "?"} err=${parsed.State?.Error ?? ""}`);
+          } catch {
+          }
+        }
+      }
+    } catch (e) {
+      core.warning(`[diag] docker.sock probe failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    }
   }
   const composeFile = composeCandidates[0];
-  core.info(`Local LLM unhealthy \u2014 starting containers via ${composeFile}`);
-  try {
-    (0, import_node_child_process.execSync)(
-      `docker compose -f ${shellQuote(composeFile)} run --rm kai-router-pull`,
-      { stdio: "pipe", timeout: 18e4 }
-    );
-    (0, import_node_child_process.execSync)(
-      `docker compose -f ${shellQuote(composeFile)} run --rm kai-compressor-pull`,
-      { stdio: "pipe", timeout: 18e4 }
-    );
-    (0, import_node_child_process.execSync)(
-      `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
-      { stdio: "pipe", timeout: 6e4 }
-    );
-  } catch (e) {
-    core.warning(`docker compose up failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+  const hasDockerCli = (() => {
+    try {
+      (0, import_node_child_process.execSync)("command -v docker", { stdio: "pipe", timeout: 2e3 });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (hasDockerCli && composeFile) {
+    core.info(`Starting containers via ${composeFile}`);
+    try {
+      (0, import_node_child_process.execSync)(
+        `docker compose -f ${shellQuote(composeFile)} run --rm kai-router-pull`,
+        { stdio: "pipe", timeout: 18e4 }
+      );
+      (0, import_node_child_process.execSync)(
+        `docker compose -f ${shellQuote(composeFile)} run --rm kai-compressor-pull`,
+        { stdio: "pipe", timeout: 18e4 }
+      );
+      (0, import_node_child_process.execSync)(
+        `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
+        { stdio: "pipe", timeout: 6e4 }
+      );
+    } catch (e) {
+      core.warning(`docker compose up failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+      return;
+    }
+  } else {
+    core.warning("No docker CLI available to restart containers; leaving as-is until we know why they're down.");
     return;
   }
   const deadline = Date.now() + 3e4;

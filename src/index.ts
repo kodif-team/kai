@@ -486,32 +486,75 @@ async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Pr
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`,
   ].filter((p): p is string => !!p && existsSync(p));
 
-  if (composeCandidates.length === 0) {
-    core.warning(
-      "Local LLM is down and no docker-compose.router.yml found on the runner. "
-      + "Place it at /home/kai/kai-router/ or set KAI_COMPOSE_FILE.",
-    );
-    return;
+  // READ-ONLY probe via /var/run/docker.sock. We have the socket but no docker
+  // CLI — that's enough to read container state + logs (Docker Engine API). We
+  // deliberately do NOT start/restart here until we see WHY the router died.
+  if (existsSync("/var/run/docker.sock")) {
+    try {
+      const filters = encodeURIComponent(JSON.stringify({ name: ["kai-router", "kai-compressor"] }));
+      const raw = execSync(
+        `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&filters=${filters}'`,
+        { stdio: "pipe", timeout: 10_000, encoding: "utf-8" },
+      );
+      const containers = JSON.parse(raw) as Array<{
+        Id: string; Names: string[]; State: string; Status: string; Image: string;
+      }>;
+      if (containers.length === 0) {
+        core.warning("[diag] docker API: no kai-router/kai-compressor containers exist on this host");
+      } else {
+        for (const c of containers) {
+          const name = (c.Names[0] || "").replace(/^\//, "");
+          core.info(`[diag] container ${name}: state=${c.State} status=${c.Status} image=${c.Image}`);
+          try {
+            const logs = execSync(
+              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/logs?stdout=1&stderr=1&tail=80&timestamps=1' 2>&1 | tr -d '\\0' | tr -c '[:print:][:space:]' '.'`,
+              { stdio: "pipe", timeout: 10_000, encoding: "utf-8" },
+            );
+            core.info(`[diag] ${name} last 80 lines:\n${logs.slice(-4000)}`);
+          } catch (e: unknown) {
+            core.info(`[diag] ${name} logs fetch error: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+          }
+          try {
+            const inspect = execSync(
+              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/json' 2>&1`,
+              { stdio: "pipe", timeout: 10_000, encoding: "utf-8" },
+            );
+            const parsed = JSON.parse(inspect) as {
+              RestartCount?: number; State?: { ExitCode?: number; Error?: string; OOMKilled?: boolean; Health?: { Status?: string; FailingStreak?: number } };
+            };
+            core.info(`[diag] ${name} inspect: restartCount=${parsed.RestartCount ?? "?"} exit=${parsed.State?.ExitCode ?? "?"} oom=${parsed.State?.OOMKilled ?? "?"} health=${parsed.State?.Health?.Status ?? "?"} err=${parsed.State?.Error ?? ""}`);
+          } catch { /* best-effort */ }
+        }
+      }
+    } catch (e: unknown) {
+      core.warning(`[diag] docker.sock probe failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    }
   }
+
+  // Separate fallback path for autostart — only runs when compose file + docker
+  // CLI both available. Not used on bare runners (those see read-only diag
+  // above and escalate to the operator until we know what's crashing).
   const composeFile = composeCandidates[0];
-  core.info(`Local LLM unhealthy — starting containers via ${composeFile}`);
-  try {
-    // Model pull jobs are idempotent (check-then-skip) — ~200ms when cached,
-    // ~15s on first boot of a runner.
-    execSync(
-      `docker compose -f ${shellQuote(composeFile)} run --rm kai-router-pull`,
-      { stdio: "pipe", timeout: 180_000 },
-    );
-    execSync(
-      `docker compose -f ${shellQuote(composeFile)} run --rm kai-compressor-pull`,
-      { stdio: "pipe", timeout: 180_000 },
-    );
-    execSync(
-      `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
-      { stdio: "pipe", timeout: 60_000 },
-    );
-  } catch (e: unknown) {
-    core.warning(`docker compose up failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+  const hasDockerCli = (() => {
+    try { execSync("command -v docker", { stdio: "pipe", timeout: 2000 }); return true; }
+    catch { return false; }
+  })();
+
+  if (hasDockerCli && composeFile) {
+    core.info(`Starting containers via ${composeFile}`);
+    try {
+      execSync(`docker compose -f ${shellQuote(composeFile)} run --rm kai-router-pull`,
+        { stdio: "pipe", timeout: 180_000 });
+      execSync(`docker compose -f ${shellQuote(composeFile)} run --rm kai-compressor-pull`,
+        { stdio: "pipe", timeout: 180_000 });
+      execSync(`docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
+        { stdio: "pipe", timeout: 60_000 });
+    } catch (e: unknown) {
+      core.warning(`docker compose up failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+      return;
+    }
+  } else {
+    core.warning("No docker CLI available to restart containers; leaving as-is until we know why they're down.");
     return;
   }
 
