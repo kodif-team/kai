@@ -15,7 +15,7 @@ function isShortAnswerRequest(message: string): boolean {
 
 function disallowedToolsFor(userMessage: string): string[] {
   if (!isShortAnswerRequest(userMessage)) return [];
-  return ["Glob", "WebFetch", "WebSearch", "Bash(find:*)", "Bash(cd:*)", "Bash(ls:*)"];
+  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
 }
 
 test("short-answer detector catches the expensive phrasing we observed", () => {
@@ -38,9 +38,9 @@ test("short-answer detector does NOT match tasks that need exploration", () => {
 test("tool gating applies only on short-answer intent", () => {
   assert.deepEqual(disallowedToolsFor("review this PR"), []);
   const gated = disallowedToolsFor("biggest risk? one sentence.");
-  assert.ok(gated.includes("Glob"));
-  assert.ok(gated.includes("Bash(find:*)"));
-  assert.ok(gated.includes("WebFetch"));
-  // Read is NOT gated — truncated diffs may still need a targeted file read.
-  assert.ok(!gated.includes("Read"));
+  // With the diff pre-digested in the prompt, short-answer has everything it
+  // needs — block every exploration tool so Claude answers from the diff text.
+  for (const t of ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"]) {
+    assert.ok(gated.includes(t), `short-answer must gate ${t}`);
+  }
 });

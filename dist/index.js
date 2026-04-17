@@ -29066,7 +29066,7 @@ function getMaxTurns(message, modelTier) {
   if (modelTier === "sonnet") return 20;
   const needsWrite = /fix|commit|push|apply|create|patch|refactor|document/i.test(message);
   if (needsWrite) return 20;
-  if (isShortAnswerRequest(message)) return 6;
+  if (isShortAnswerRequest(message)) return 3;
   const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
   return isTrulySimple ? 8 : 12;
 }
@@ -29139,7 +29139,7 @@ _Delete this comment to cancel._`
 }
 function disallowedToolsFor(userMessage) {
   if (!isShortAnswerRequest(userMessage)) return [];
-  return ["Glob", "WebFetch", "WebSearch", "Bash(find:*)", "Bash(cd:*)", "Bash(ls:*)"];
+  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
 }
 function runCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, isRoot, hb, db, runId, disallowedTools = []) {
   return new Promise((resolve, reject) => {

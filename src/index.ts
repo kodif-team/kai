@@ -786,9 +786,11 @@ function getMaxTurns(message: string, modelTier: string): number {
   // also matched simple but is actually a review — bumped to 12 default.
   const needsWrite = /fix|commit|push|apply|create|patch|refactor|document/i.test(message);
   if (needsWrite) return 20;
-  // Short-answer requests (one sentence / briefly / tl;dr) must stay cheap:
-  // prompt directive plus a tight budget cap aligns model behavior with cost.
-  if (isShortAnswerRequest(message)) return 6;
+  // Short-answer: exploration is blocked via --disallowed-tools (Read, Bash,
+  // Glob, Web*), so Claude must answer from the pre-digested diff in the
+  // prompt. 3 turns = tool-attempt -> rejection -> final answer. Keeps cost
+  // bounded regardless of whether the model tries to explore.
+  if (isShortAnswerRequest(message)) return 3;
   const isTrulySimple = message.length < 50
     && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
   return isTrulySimple ? 8 : 12;
@@ -874,11 +876,15 @@ async function callClaudeCLIWithHeartbeat(
   throw new Error("All CLI retries exhausted");
 }
 
-// Tools Claude cannot call on short-answer requests. Read stays allowed in case
-// the diff digest was truncated; Glob/Grep/find are the expensive explorers.
+// Short-answer requests ship with the full unified PR diff pre-fetched in the
+// prompt. Block ALL exploration tools so Claude cannot burn turns re-reading
+// files or shell-exploring — it must answer from the diff text. This is the
+// only way to keep short-answer cost predictable; with Read/Bash allowed,
+// Claude ignored the "do not read" prompt directive on 2026-04-17 and still
+// produced 173K-token runs.
 function disallowedToolsFor(userMessage: string): string[] {
   if (!isShortAnswerRequest(userMessage)) return [];
-  return ["Glob", "WebFetch", "WebSearch", "Bash(find:*)", "Bash(cd:*)", "Bash(ls:*)"];
+  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
 }
 
 function runCLIWithHeartbeat(
