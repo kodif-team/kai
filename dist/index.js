@@ -28157,6 +28157,33 @@ var ROUTER_RESPONSE_FORMAT = {
     required: ["intent"]
   }
 };
+async function callRouterOnce(url, model, messages, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+        temperature: 0,
+        max_tokens: 40,
+        response_format: ROUTER_RESPONSE_FORMAT
+      }),
+      signal: controller.signal
+    });
+    if (!res.ok) throw new LocalRouterUnavailableError(`HTTP ${res.status}`);
+    const body = await res.json();
+    const content = body.choices?.[0]?.message?.content ?? "";
+    const intent = parseIntentOnly(content);
+    if (!intent) throw new LocalRouterUnavailableError("invalid intent payload");
+    return intent;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 async function routeEventWithLocalLLM(rawMessage, modelTier, options) {
   const rules = routeEvent(rawMessage, modelTier);
   if (rules.decision !== "call-model") return rules;
@@ -28165,51 +28192,35 @@ async function routeEventWithLocalLLM(rawMessage, modelTier, options) {
     if (options?.allowRulesOnly) return rules;
     throw new LocalRouterUnavailableError("local router URL is required before paid model calls");
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3e3);
+  const model = options?.model ?? process.env.KAI_ROUTER_MODEL ?? "LFM2-350M";
+  const timeoutMs = options?.timeoutMs ?? 3e3;
+  const messages = localRouterMessages(rules.normalizedMessage);
   const started = Date.now();
-  try {
-    const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: options?.model ?? process.env.KAI_ROUTER_MODEL ?? "LFM2-350M",
-        messages: localRouterMessages(rules.normalizedMessage),
-        stream: false,
-        temperature: 0,
-        max_tokens: 40,
-        response_format: ROUTER_RESPONSE_FORMAT
-      }),
-      signal: controller.signal
-    });
-    if (!res.ok) {
-      throw new LocalRouterUnavailableError(`local router returned HTTP ${res.status}`);
+  const delaysMs = [0, 400, 1200];
+  let lastErr;
+  for (const delay of delaysMs) {
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    try {
+      const intent = await callRouterOnce(url, model, messages, timeoutMs);
+      const elapsedMs = Date.now() - started;
+      const decision = decisionForIntent(intent);
+      return {
+        ...rules,
+        intent,
+        decision,
+        confidence: 0.8,
+        reason: `local-llm (${elapsedMs}ms)`,
+        commitExpected: commitExpectedForIntent(intent),
+        maxContextTokens: decision === "call-model" ? rules.maxContextTokens : 0,
+        source: "local-llm"
+      };
+    } catch (error2) {
+      lastErr = error2;
+      if (error2 instanceof LocalRouterUnavailableError && /invalid intent/.test(error2.message)) break;
     }
-    const body = await res.json();
-    const content = body.choices?.[0]?.message?.content ?? "";
-    const intent = parseIntentOnly(content);
-    if (!intent) {
-      throw new LocalRouterUnavailableError("local router returned invalid intent");
-    }
-    const elapsedMs = Date.now() - started;
-    const decision = decisionForIntent(intent);
-    return {
-      ...rules,
-      intent,
-      decision,
-      confidence: 0.8,
-      reason: `local-llm (${elapsedMs}ms)`,
-      commitExpected: commitExpectedForIntent(intent),
-      maxContextTokens: decision === "call-model" ? rules.maxContextTokens : 0,
-      source: "local-llm"
-    };
-  } catch (error2) {
-    if (error2 instanceof LocalRouterUnavailableError) throw error2;
-    const message = error2 instanceof Error ? error2.message : String(error2);
-    throw new LocalRouterUnavailableError(`local router request failed: ${message}`);
-  } finally {
-    clearTimeout(timeout);
   }
+  const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new LocalRouterUnavailableError(`local router request failed: ${message}`);
 }
 
 // src/templates.ts
@@ -29116,7 +29127,8 @@ async function run() {
     const { model: parsedTier, cleanMessage: userMessage } = parseModelFromMessage(rawMessage);
     const userSpecifiedTier = /\buse\s+(haiku|sonnet|opus)\b/i.test(rawMessage);
     let suggestedTier = null;
-    if (!userSpecifiedTier && routerUrl) {
+    const tierSuggestDisabled = process.env.KAI_TIER_SUGGEST_DISABLE === "true" || !!routerUrl && !!compressorUrl && routerUrl === compressorUrl;
+    if (!userSpecifiedTier && routerUrl && !tierSuggestDisabled) {
       try {
         suggestedTier = await suggestTierWithLocalLLM(userMessage, {
           url: routerUrl,

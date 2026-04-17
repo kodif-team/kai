@@ -226,6 +226,32 @@ const ROUTER_RESPONSE_FORMAT = {
   },
 };
 
+async function callRouterOnce(
+  url: string, model: string, messages: ChatMessage[], timeoutMs: number,
+): Promise<RouterIntent> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model, messages, stream: false, temperature: 0, max_tokens: 40,
+        response_format: ROUTER_RESPONSE_FORMAT,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new LocalRouterUnavailableError(`HTTP ${res.status}`);
+    const body = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const content = body.choices?.[0]?.message?.content ?? "";
+    const intent = parseIntentOnly(content);
+    if (!intent) throw new LocalRouterUnavailableError("invalid intent payload");
+    return intent;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function routeEventWithLocalLLM(
   rawMessage: string,
   modelTier: string,
@@ -242,50 +268,40 @@ export async function routeEventWithLocalLLM(
     throw new LocalRouterUnavailableError("local router URL is required before paid model calls");
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3000);
+  const model = options?.model ?? process.env.KAI_ROUTER_MODEL ?? "LFM2-350M";
+  const timeoutMs = options?.timeoutMs ?? 3000;
+  const messages = localRouterMessages(rules.normalizedMessage);
   const started = Date.now();
-  try {
-    const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: options?.model ?? process.env.KAI_ROUTER_MODEL ?? "LFM2-350M",
-        messages: localRouterMessages(rules.normalizedMessage),
-        stream: false,
-        temperature: 0,
-        max_tokens: 40,
-        response_format: ROUTER_RESPONSE_FORMAT,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      throw new LocalRouterUnavailableError(`local router returned HTTP ${res.status}`);
-    }
-    const body = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const content = body.choices?.[0]?.message?.content ?? "";
-    const intent = parseIntentOnly(content);
-    if (!intent) {
-      throw new LocalRouterUnavailableError("local router returned invalid intent");
-    }
 
-    const elapsedMs = Date.now() - started;
-    const decision = decisionForIntent(intent);
-    return {
-      ...rules,
-      intent,
-      decision,
-      confidence: 0.8,
-      reason: `local-llm (${elapsedMs}ms)`,
-      commitExpected: commitExpectedForIntent(intent),
-      maxContextTokens: decision === "call-model" ? rules.maxContextTokens : 0,
-      source: "local-llm",
-    };
-  } catch (error) {
-    if (error instanceof LocalRouterUnavailableError) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    throw new LocalRouterUnavailableError(`local router request failed: ${message}`);
-  } finally {
-    clearTimeout(timeout);
+  // Retry with small backoff — llama.cpp server with --parallel 1 occasionally
+  // rejects the next connection while it's still flushing the previous one
+  // (e.g. after a back-to-back tier-suggest call). Two extra tries add ≤1s in
+  // the worst case and fix the observed intermittent "fetch failed".
+  const delaysMs = [0, 400, 1200];
+  let lastErr: unknown;
+  for (const delay of delaysMs) {
+    if (delay) await new Promise(r => setTimeout(r, delay));
+    try {
+      const intent = await callRouterOnce(url, model, messages, timeoutMs);
+      const elapsedMs = Date.now() - started;
+      const decision = decisionForIntent(intent);
+      return {
+        ...rules,
+        intent,
+        decision,
+        confidence: 0.8,
+        reason: `local-llm (${elapsedMs}ms)`,
+        commitExpected: commitExpectedForIntent(intent),
+        maxContextTokens: decision === "call-model" ? rules.maxContextTokens : 0,
+        source: "local-llm",
+      };
+    } catch (error) {
+      lastErr = error;
+      // Don't retry on explicit "invalid intent" — that's deterministic payload
+      // noise, not a transient socket issue.
+      if (error instanceof LocalRouterUnavailableError && /invalid intent/.test(error.message)) break;
+    }
   }
+  const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new LocalRouterUnavailableError(`local router request failed: ${message}`);
 }

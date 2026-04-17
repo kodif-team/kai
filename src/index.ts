@@ -877,9 +877,13 @@ async function run() {
     const userSpecifiedTier = /\buse\s+(haiku|sonnet|opus)\b/i.test(rawMessage);
 
     // If the user didn't explicitly pick a tier, ask the local LLM to suggest one
-    // based on task complexity. Honors user override + allowlist cap.
+    // based on task complexity. Honors user override + allowlist cap. Skipped
+    // when router and compressor share the same endpoint (llama.cpp --parallel 1
+    // chokes on back-to-back hits) or when disabled via env.
     let suggestedTier: string | null = null;
-    if (!userSpecifiedTier && routerUrl) {
+    const tierSuggestDisabled = process.env.KAI_TIER_SUGGEST_DISABLE === "true"
+      || (!!routerUrl && !!compressorUrl && routerUrl === compressorUrl);
+    if (!userSpecifiedTier && routerUrl && !tierSuggestDisabled) {
       try {
         suggestedTier = await suggestTierWithLocalLLM(userMessage, {
           url: routerUrl, model: routerModel, timeoutMs: 2500,
