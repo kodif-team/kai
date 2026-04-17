@@ -1,6 +1,7 @@
 services:
   kai-router-llm:
     image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: kai-router
     restart: unless-stopped
     ports:
       - "${KAI_ROUTER_PORT}:8080"
@@ -25,6 +26,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 24
+    networks:
+      - kai
 
   kai-router-pull:
     image: alpine:latest
@@ -54,9 +57,12 @@ services:
         fi
         ls -lh /models/
     restart: "no"
+    networks:
+      - kai
 
   kai-compressor-llm:
     image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: kai-compressor
     restart: unless-stopped
     ports:
       - "${KAI_COMPRESSOR_PORT}:8081"
@@ -81,6 +87,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 24
+    networks:
+      - kai
 
   kai-compressor-pull:
     image: alpine:latest
@@ -110,6 +118,12 @@ services:
         fi
         ls -lh /models/
     restart: "no"
+    networks:
+      - kai
+
+networks:
+  kai:
+    driver: bridge
 
 volumes:
   kai-router-gguf:
