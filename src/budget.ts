@@ -44,7 +44,7 @@ function isImperativeWriteRequest(message: string): boolean {
 export function getMaxTurns(message: string, modelTier: string): number {
   if (isShortAnswerRequest(message)) return 1;
   if (isReadOnlyValidationRequest(message)) return 2;
-  if (modelTier === "opus") return 25;
+  if (modelTier === "opus") return 10;
   if (modelTier === "sonnet") return 20;
   if (isImperativeWriteRequest(message)) return 20;
   // Haiku is budget-constrained — review/refactor tasks use 2 turns to stay under $0.05 cap

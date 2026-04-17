@@ -34,7 +34,7 @@ inputs:
   compressor_min_prompt_tokens:
     description: 'Skip compression when prompt token estimate is below this threshold'
     required: false
-    default: '2200'
+    default: '1000'
 
 runs:
   using: 'node24'
