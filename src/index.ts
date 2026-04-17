@@ -432,13 +432,14 @@ async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Pr
   const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
   if (probes.every(Boolean)) return; // everything already up
 
-  // GITHUB_ACTION_PATH points to the action's own checkout on the runner —
-  // docker-compose.router.yml ships with the action, so this works out of the
-  // box with zero runner-side setup required.
-  const actionPath = process.env.GITHUB_ACTION_PATH;
+  // __dirname of the bundle is <action>/dist/; the compose file ships one level
+  // up. GITHUB_ACTION_PATH is only set for composite actions, not JS actions,
+  // so __dirname is the reliable source. Works zero-config on any runner.
+  const bundleDir = typeof __dirname === "string" ? __dirname : "";
   const composeCandidates = [
     process.env.KAI_COMPOSE_FILE,
-    actionPath ? `${actionPath}/docker-compose.router.yml` : "",
+    bundleDir ? `${bundleDir}/../docker-compose.router.yml` : "",
+    process.env.GITHUB_ACTION_PATH ? `${process.env.GITHUB_ACTION_PATH}/docker-compose.router.yml` : "",
     "/home/kai/kai-router/docker-compose.router.yml",
     "/home/kai/docker-compose.router.yml",
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`,

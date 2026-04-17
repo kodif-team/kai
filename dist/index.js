@@ -28781,10 +28781,11 @@ async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
   if (endpoints.length === 0) return;
   const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
   if (probes.every(Boolean)) return;
-  const actionPath = process.env.GITHUB_ACTION_PATH;
+  const bundleDir = typeof __dirname === "string" ? __dirname : "";
   const composeCandidates = [
     process.env.KAI_COMPOSE_FILE,
-    actionPath ? `${actionPath}/docker-compose.router.yml` : "",
+    bundleDir ? `${bundleDir}/../docker-compose.router.yml` : "",
+    process.env.GITHUB_ACTION_PATH ? `${process.env.GITHUB_ACTION_PATH}/docker-compose.router.yml` : "",
     "/home/kai/kai-router/docker-compose.router.yml",
     "/home/kai/docker-compose.router.yml",
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`
