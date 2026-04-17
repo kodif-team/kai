@@ -70,12 +70,12 @@ test("escalation math: haiku → sonnet → opus chain", () => {
   assert.equal(opusDec.allowed, false);
   if (!opusDec.allowed) assert.equal(opusDec.kind, "cost-over-cap");
 
-  // Practical: 15K token haiku should pass
+  // Practical before CLI reserve: 15K token haiku looked safe by prompt math,
+  // but hidden CLI/cache overhead can consume the Haiku cap before an answer.
   const small = 15_000;
   const haiku15k = preflightBudget("review this PR", small, "haiku");
-  // 2 × 15K × $1/M + $0.010 = $0.030 + $0.010 = $0.040 ✓ (under $0.05 cap)
-  assert.equal(haiku15k.allowed, true,
-    "15K-token review on haiku should pass");
+  assert.equal(haiku15k.allowed, false,
+    "15K-token review on haiku should be refused/escalated because CLI reserve exceeds cap");
 
   // 3K tokens should pass sonnet: 20 × 3K × $3/M + $0.30 = $0.18 + $0.30 = $0.48 ✓
   const sonnet3k = preflightBudget("review this PR", 3_000, "sonnet");

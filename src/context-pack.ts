@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import type { RouterDecision } from "./router";
 
 type ContextPackInput = {
@@ -29,6 +29,15 @@ function sanitizeSegment(input: string): string {
   return input.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function contentOrLabel(value: string | undefined, fallback: string): string {
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  return fallback;
+}
+
+function repoServiceName(repoFullName: string): string {
+  return posix.basename(repoFullName);
+}
+
 export function createDynamicContextPack(input: ContextPackInput): DynamicContextPack {
   const dirName = sanitizeSegment(input.runId);
   const baseDir = join("/tmp", "kai-context", dirName);
@@ -54,12 +63,12 @@ export function createDynamicContextPack(input: ContextPackInput): DynamicContex
     `Repository: ${input.repoFullName}`,
     `PR #${input.issueNumber}: ${input.prTitle}`,
     `Description:`,
-    input.prBody || "(empty)",
+    contentOrLabel(input.prBody, "(empty)"),
   ].join("\n"), "utf-8");
 
-  writeFileSync(changedFilesPath, input.filesList || "(none)", "utf-8");
-  writeFileSync(commentsPath, input.prCommentsContext || "(none)", "utf-8");
-  writeFileSync(prDiffPath, input.prDiffDigest || "(none)", "utf-8");
+  writeFileSync(changedFilesPath, contentOrLabel(input.filesList, "(none)"), "utf-8");
+  writeFileSync(commentsPath, contentOrLabel(input.prCommentsContext, "(none)"), "utf-8");
+  writeFileSync(prDiffPath, contentOrLabel(input.prDiffDigest, "(none)"), "utf-8");
 
   if (input.architectureContext) {
     writeFileSync(architecturePath, input.architectureContext, "utf-8");
@@ -108,10 +117,10 @@ export function buildDynamicPromptFromManifest(
   route: RouterDecision,
   manifestPath: string,
   isArchitectureTask: boolean,
-  prDiffDigest = "",
+  prDiffDigest: string,
 ): string {
   const core = [
-    `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}.`,
+    `Kai, AI code reviewer. Service: repos/${repoServiceName(repoFullName)}.`,
     `Task: ${userMessage}`,
     `Router: intent=${route.intent}; decision=${route.decision}; confidence=${route.confidence}; contextBudget=${route.maxContextTokens}; commitExpected=${route.commitExpected}`,
     `Dynamic context manifest: ${manifestPath}`,

@@ -1,4 +1,9 @@
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export enum LogLevel {
+  Debug = "debug",
+  Info = "info",
+  Warn = "warn",
+  Error = "error",
+}
 
 export type Logger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
@@ -52,29 +57,31 @@ export function errorMeta(error: unknown): Record<string, unknown> {
 
 export function createLogger(component: string, level: LogLevel): Logger {
   const enabled = {
-    debug: level === "debug",
-    info: level === "debug" || level === "info",
-    warn: true,
-    error: true,
+    [LogLevel.Debug]: level === LogLevel.Debug,
+    [LogLevel.Info]: level === LogLevel.Debug || level === LogLevel.Info,
+    [LogLevel.Warn]: true,
+    [LogLevel.Error]: true,
+  };
+
+  const outputFor = {
+    [LogLevel.Debug]: console.log,
+    [LogLevel.Info]: console.log,
+    [LogLevel.Warn]: console.log,
+    [LogLevel.Error]: console.error,
   };
 
   const write = (lvl: LogLevel, message: string, meta?: Record<string, unknown>) => {
     if (!enabled[lvl]) return;
-    const line = encode(lvl, component, message, meta);
-    if (lvl === "error") {
-      console.error(line);
-    } else {
-      console.log(line);
-    }
+    outputFor[lvl](encode(lvl, component, message, meta));
   };
 
   return {
-    debug: (message, meta) => write("debug", message, meta),
-    info: (message, meta) => write("info", message, meta),
-    warn: (message, meta) => write("warn", message, meta),
-    error: (message, meta) => write("error", message, meta),
+    debug: (message, meta) => write(LogLevel.Debug, message, meta),
+    info: (message, meta) => write(LogLevel.Info, message, meta),
+    warn: (message, meta) => write(LogLevel.Warn, message, meta),
+    error: (message, meta) => write(LogLevel.Error, message, meta),
     fatal: (message, meta): never => {
-      write("error", message, meta);
+      write(LogLevel.Error, message, meta);
       throw new Error(message);
     },
   };
@@ -82,6 +89,9 @@ export function createLogger(component: string, level: LogLevel): Logger {
 
 export function parseLogLevel(raw: string): LogLevel {
   const level = raw.trim().toLowerCase();
-  if (level === "debug" || level === "info" || level === "warn" || level === "error") return level;
+  if (level === LogLevel.Debug) return LogLevel.Debug;
+  if (level === LogLevel.Info) return LogLevel.Info;
+  if (level === LogLevel.Warn) return LogLevel.Warn;
+  if (level === LogLevel.Error) return LogLevel.Error;
   throw new Error(`Invalid log level: ${raw}`);
 }

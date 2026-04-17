@@ -21,6 +21,16 @@ const FILE_FOCUS_RESPONSE_FORMAT = {
   },
 };
 
+function chatCompletionsUrl(baseUrl: string): string {
+  return new URL("/v1/chat/completions", baseUrl).toString();
+}
+
+function responseContent(body: { choices?: Array<{ message?: { content?: string } }> }): string {
+  const content = body.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  return "";
+}
+
 export async function selectRelevantFiles(
   userMessage: string,
   filesList: string,
@@ -33,7 +43,7 @@ export async function selectRelevantFiles(
   const files = filesList.split("\n").map((l) => l.split(" ")[0]).filter(Boolean);
   if (files.length <= maxFiles) return files;
   try {
-    const response = await fetch(`${config.url.replace(/\/$/, "")}/v1/chat/completions`, {
+    const response = await fetch(chatCompletionsUrl(config.url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -51,7 +61,7 @@ export async function selectRelevantFiles(
     });
     if (!response.ok) return [];
     const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const content = body.choices?.[0]?.message?.content ?? "";
+    const content = responseContent(body);
     let parsed: unknown;
     try { parsed = parseJsonObject(content); } catch { return []; }
     if (!isRecord(parsed) || !Array.isArray(parsed.files)) return [];

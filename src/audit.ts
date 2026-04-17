@@ -60,17 +60,6 @@ export type SessionUpdateInput = {
   error?: string;
 };
 
-function envNumber(name: string, fallback?: number): number {
-  const raw = process.env[name];
-  if (!raw || !raw.trim()) {
-    if (fallback == null) throw new Error(`Missing required env: ${name}`);
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
-  return value;
-}
-
 const DEFAULT_RATE_LIMIT_SENDER_PER_HOUR = 20;
 const DEFAULT_RATE_LIMIT_REPO_PER_HOUR = 100;
 const DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY = 0.25;
@@ -171,9 +160,9 @@ export function checkRateLimit(
   repoFull: string,
   options: RateLimitOptions = {},
 ): RateLimitCheck {
-  const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR", DEFAULT_RATE_LIMIT_SENDER_PER_HOUR);
-  const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR", DEFAULT_RATE_LIMIT_REPO_PER_HOUR);
-  const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY);
+  const senderPerHour = DEFAULT_RATE_LIMIT_SENDER_PER_HOUR;
+  const repoPerHour = DEFAULT_RATE_LIMIT_REPO_PER_HOUR;
+  const senderCostPerDay = DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY;
   const includeCostBudget = options.includeCostBudget ?? true;
   if (!db) return { allowed: false, reason: "rate-limit database unavailable" };
   try {

@@ -33,6 +33,7 @@ test("compressPromptWithQwen skips model when disabled", async () => {
     budgetByTier: { haiku: 1000 },
     model: "LFM2-350M",
     timeoutMs: 1500,
+    debug: false,
   });
   assert.equal(result.prompt, prompt);
   assert.equal(result.metrics.usedModel, false);
@@ -51,6 +52,7 @@ test("compressPromptWithQwen throws when url missing and prompt is large", async
       budgetByTier: { haiku: 900 },
       model: "LFM2-350M",
       timeoutMs: 1500,
+      debug: false,
     }),
     (error: unknown) => {
       assert.ok(error instanceof LocalCompressorUnavailableError);
@@ -73,6 +75,7 @@ test("compressPromptWithQwen skips compression for short query under threshold",
     minQueryTokens: 10,
     model: "LFM2-350M",
     timeoutMs: 1500,
+    debug: false,
   });
   assert.equal(result.prompt, prompt);
   assert.equal(result.metrics.usedModel, false);

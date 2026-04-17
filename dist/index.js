@@ -27581,6 +27581,7 @@ var Octokit2 = Octokit.plugin(requestLog, legacyRestEndpointMethods, paginateRes
 // src/index.ts
 var import_node_child_process2 = require("node:child_process");
 var import_node_fs4 = require("node:fs");
+var import_node_path4 = require("node:path");
 
 // src/json.ts
 function isRecord(value) {
@@ -27659,12 +27660,12 @@ function splitPromptIntoChunks(prompt) {
   }));
   return chunks;
 }
-function parseCompressorPayload(raw, maxChunkId) {
+function parseCompressorPayload(raw, maxChunkId, debug) {
   let parsed;
   try {
     parsed = parseJsonObject(raw);
   } catch {
-    if (process.env.KAI_DEBUG_COMPRESSOR === "1") {
+    if (debug) {
       console.error("[kai-compressor] raw response (first 400 chars):", raw.slice(0, 400));
     }
     throw new LocalCompressorUnavailableError("local compressor returned invalid JSON");
@@ -27733,6 +27734,14 @@ var COMPRESSOR_RESPONSE_FORMAT = {
     required: ["keep_ids"]
   }
 };
+function chatCompletionsUrl(baseUrl) {
+  return new URL("/v1/chat/completions", baseUrl).toString();
+}
+function responseContent(body) {
+  const content = body.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  return "";
+}
 function mergeCompressedChunks(chunks, payload) {
   const keepIds = new Set(payload.keep_ids);
   const summaryById = new Map((payload.summaries ?? []).map((item) => [item.id, item.text.trim()]));
@@ -27785,7 +27794,7 @@ async function compressPromptWithQwen(prompt, userMessage, modelTier, config) {
     throw new LocalCompressorUnavailableError("compression required but missing KAI_COMPRESSOR_URL");
   }
   const signal = AbortSignal.timeout(config.timeoutMs);
-  const response = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+  const response = await fetch(chatCompletionsUrl(url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -27804,8 +27813,8 @@ async function compressPromptWithQwen(prompt, userMessage, modelTier, config) {
     throw new LocalCompressorUnavailableError(`local compressor returned HTTP ${response.status}`);
   }
   const body = await response.json();
-  const content = body.choices?.[0]?.message?.content ?? "";
-  const parsed = parseCompressorPayload(content, chunks.length);
+  const content = responseContent(body);
+  const parsed = parseCompressorPayload(content, chunks.length, config.debug);
   const merged = mergeCompressedChunks(chunks, parsed);
   if (!merged.trim()) {
     throw new LocalCompressorUnavailableError("local compressor returned empty merged prompt");
@@ -28373,8 +28382,8 @@ var parseLogLevel = (maybeLevel, sourceName, client) => {
 };
 function noop2() {
 }
-function makeLogFn(fnLevel, logger, logLevel2) {
-  if (!logger || levelNumbers[fnLevel] > levelNumbers[logLevel2]) {
+function makeLogFn(fnLevel, logger, logLevel) {
+  if (!logger || levelNumbers[fnLevel] > levelNumbers[logLevel]) {
     return noop2;
   } else {
     return logger[fnLevel].bind(logger);
@@ -28389,21 +28398,21 @@ var noopLogger = {
 var cachedLoggers = /* @__PURE__ */ new WeakMap();
 function loggerFor(client) {
   const logger = client.logger;
-  const logLevel2 = client.logLevel ?? "off";
+  const logLevel = client.logLevel ?? "off";
   if (!logger) {
     return noopLogger;
   }
   const cachedLogger = cachedLoggers.get(logger);
-  if (cachedLogger && cachedLogger[0] === logLevel2) {
+  if (cachedLogger && cachedLogger[0] === logLevel) {
     return cachedLogger[1];
   }
   const levelLogger = {
-    error: makeLogFn("error", logger, logLevel2),
-    warn: makeLogFn("warn", logger, logLevel2),
-    info: makeLogFn("info", logger, logLevel2),
-    debug: makeLogFn("debug", logger, logLevel2)
+    error: makeLogFn("error", logger, logLevel),
+    warn: makeLogFn("warn", logger, logLevel),
+    info: makeLogFn("info", logger, logLevel),
+    debug: makeLogFn("debug", logger, logLevel)
   };
-  cachedLoggers.set(logger, [logLevel2, levelLogger]);
+  cachedLoggers.set(logger, [logLevel, levelLogger]);
   return levelLogger;
 }
 var formatRequestDetails = (details) => {
@@ -33655,6 +33664,13 @@ var import_node_path = require("node:path");
 function sanitizeSegment(input) {
   return input.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
+function contentOrLabel(value, fallback) {
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  return fallback;
+}
+function repoServiceName(repoFullName) {
+  return import_node_path.posix.basename(repoFullName);
+}
 function createDynamicContextPack(input) {
   const dirName = sanitizeSegment(input.runId);
   const baseDir = (0, import_node_path.join)("/tmp", "kai-context", dirName);
@@ -33677,11 +33693,11 @@ function createDynamicContextPack(input) {
     `Repository: ${input.repoFullName}`,
     `PR #${input.issueNumber}: ${input.prTitle}`,
     `Description:`,
-    input.prBody || "(empty)"
+    contentOrLabel(input.prBody, "(empty)")
   ].join("\n"), "utf-8");
-  (0, import_node_fs.writeFileSync)(changedFilesPath, input.filesList || "(none)", "utf-8");
-  (0, import_node_fs.writeFileSync)(commentsPath, input.prCommentsContext || "(none)", "utf-8");
-  (0, import_node_fs.writeFileSync)(prDiffPath, input.prDiffDigest || "(none)", "utf-8");
+  (0, import_node_fs.writeFileSync)(changedFilesPath, contentOrLabel(input.filesList, "(none)"), "utf-8");
+  (0, import_node_fs.writeFileSync)(commentsPath, contentOrLabel(input.prCommentsContext, "(none)"), "utf-8");
+  (0, import_node_fs.writeFileSync)(prDiffPath, contentOrLabel(input.prDiffDigest, "(none)"), "utf-8");
   if (input.architectureContext) {
     (0, import_node_fs.writeFileSync)(architecturePath, input.architectureContext, "utf-8");
   }
@@ -33720,9 +33736,9 @@ function appendContextHistory(historyPath, event, payload) {
   })}
 `, "utf-8");
 }
-function buildDynamicPromptFromManifest(userMessage, repoFullName, route, manifestPath, isArchitectureTask, prDiffDigest = "") {
+function buildDynamicPromptFromManifest(userMessage, repoFullName, route, manifestPath, isArchitectureTask, prDiffDigest) {
   const core4 = [
-    `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}.`,
+    `Kai, AI code reviewer. Service: repos/${repoServiceName(repoFullName)}.`,
     `Task: ${userMessage}`,
     `Router: intent=${route.intent}; decision=${route.decision}; confidence=${route.confidence}; contextBudget=${route.maxContextTokens}; commitExpected=${route.commitExpected}`,
     `Dynamic context manifest: ${manifestPath}`,
@@ -33926,12 +33942,20 @@ var TIER_RESPONSE_FORMAT = {
     required: ["tier"]
   }
 };
+function chatCompletionsUrl2(baseUrl) {
+  return new URL("/v1/chat/completions", baseUrl).toString();
+}
+function responseContent2(body) {
+  const content = body.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  return "";
+}
 async function suggestTierWithLocalLLM(message, options) {
   if (!options.model) throw new Error("local router model is required");
   if (options.timeoutMs == null) throw new Error("KAI_ROUTER_TIMEOUT_MS is required");
   const signal = AbortSignal.timeout(options.timeoutMs);
   try {
-    const res = await fetch(`${options.url.replace(/\/$/, "")}/v1/chat/completions`, {
+    const res = await fetch(chatCompletionsUrl2(options.url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -33951,11 +33975,14 @@ Return {"tier":"haiku"} or {"tier":"sonnet"} or {"tier":"opus"}.`
     });
     if (!res.ok) return null;
     const body = await res.json();
-    const content = body.choices?.[0]?.message?.content ?? "";
+    const content = responseContent2(body);
     try {
       const parsed = parseJsonObject(content);
       if (!isRecord(parsed) || typeof parsed.tier !== "string") return null;
-      return TIER_VALUES.includes(parsed.tier) ? parsed.tier : null;
+      if (TIER_VALUES.includes(parsed.tier)) {
+        return parsed.tier;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -33994,7 +34021,7 @@ var ROUTER_RESPONSE_FORMAT = {
 };
 async function callRouterOnce(url, model, messages, timeoutMs) {
   const signal = AbortSignal.timeout(timeoutMs);
-  const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+  const res = await fetch(chatCompletionsUrl2(url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -34009,7 +34036,7 @@ async function callRouterOnce(url, model, messages, timeoutMs) {
   });
   if (!res.ok) throw new LocalRouterUnavailableError(`HTTP ${res.status}`);
   const body = await res.json();
-  const content = body.choices?.[0]?.message?.content ?? "";
+  const content = responseContent2(body);
   const intent = parseIntentOnly(content);
   if (!intent) throw new LocalRouterUnavailableError("invalid intent payload");
   return intent;
@@ -34017,11 +34044,8 @@ async function callRouterOnce(url, model, messages, timeoutMs) {
 async function routeEventWithLocalLLM(rawMessage, modelTier, options) {
   const rules = routeEvent(rawMessage, modelTier);
   if (rules.decision !== "call-model") return rules;
-  const url = options?.url ?? process.env.KAI_ROUTER_URL;
-  if (!url) {
-    throw new LocalRouterUnavailableError("local router URL is required before paid model calls");
-  }
-  if (!options) throw new LocalRouterUnavailableError("router options are required");
+  const url = options.url;
+  if (!url) throw new LocalRouterUnavailableError("local router URL is required before paid model calls");
   const model = options.model;
   if (!model) throw new LocalRouterUnavailableError("local router model is required");
   if (options.timeoutMs == null) throw new Error("router timeout is required");
@@ -34137,6 +34161,14 @@ var FILE_FOCUS_RESPONSE_FORMAT = {
     required: ["files"]
   }
 };
+function chatCompletionsUrl3(baseUrl) {
+  return new URL("/v1/chat/completions", baseUrl).toString();
+}
+function responseContent3(body) {
+  const content = body.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  return "";
+}
 async function selectRelevantFiles(userMessage, filesList, config) {
   if (config.maxFiles == null) throw new Error("file-focus maxFiles is required");
   if (config.timeoutMs == null) throw new Error("file-focus timeoutMs is required");
@@ -34145,7 +34177,7 @@ async function selectRelevantFiles(userMessage, filesList, config) {
   const files = filesList.split("\n").map((l) => l.split(" ")[0]).filter(Boolean);
   if (files.length <= maxFiles) return files;
   try {
-    const response = await fetch(`${config.url.replace(/\/$/, "")}/v1/chat/completions`, {
+    const response = await fetch(chatCompletionsUrl3(config.url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -34167,7 +34199,7 @@ Return {"files":["path","..."]} with exact paths from the list.`
     });
     if (!response.ok) return [];
     const body = await response.json();
-    const content = body.choices?.[0]?.message?.content ?? "";
+    const content = responseContent3(body);
     let parsed;
     try {
       parsed = parseJsonObject(content);
@@ -34196,78 +34228,6 @@ function buildCacheFriendlyPrompt(sections) {
     parts.push(...dynamic);
   }
   return parts.join("\n\n").trim();
-}
-
-// src/config.ts
-function env(name) {
-  const value = process.env[name];
-  if (!value || !value.trim()) throw new Error(`Missing required env: ${name}`);
-  return value.trim();
-}
-function envOr(name, fallback) {
-  const value = process.env[name];
-  return value && value.trim() ? value.trim() : fallback;
-}
-function optEnv(name) {
-  const value = process.env[name];
-  return value && value.trim() ? value.trim() : void 0;
-}
-function num(name, min, max, fallback) {
-  const raw = process.env[name];
-  if (!raw || !raw.trim()) {
-    if (fallback == null) throw new Error(`Missing required env: ${name}`);
-    if (fallback < min || fallback > max) throw new Error(`${name} default out of range: ${fallback}`);
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
-  if (value < min || value > max) throw new Error(`${name} out of range: ${value} not in [${min}, ${max}]`);
-  return value;
-}
-function bool(name, fallback) {
-  const rawMaybe = process.env[name];
-  if (!rawMaybe || !rawMaybe.trim()) {
-    if (fallback == null) throw new Error(`Missing required env: ${name}`);
-    return fallback;
-  }
-  const raw = rawMaybe.trim().toLowerCase();
-  if (raw === "true") return true;
-  if (raw === "false") return false;
-  throw new Error(`Invalid boolean for ${name}: ${raw}`);
-}
-function logLevel(name) {
-  const raw = env(name).toLowerCase();
-  if (raw === "debug" || raw === "info" || raw === "warn" || raw === "error") return raw;
-  throw new Error(`Invalid log level for ${name}: ${raw}`);
-}
-function loadConfig() {
-  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN", false);
-  const runnerToken = optEnv("RUNNER_TOKEN");
-  if (!runnerAllowNoToken && !runnerToken) {
-    throw new Error("RUNNER_TOKEN is required unless KAI_RUNNER_ALLOW_NO_TOKEN=true");
-  }
-  return {
-    auditDbPath: env("KAI_AUDIT_DB"),
-    routerUrl: envOr("KAI_ROUTER_URL", "http://kai-router:8080"),
-    compressorUrl: envOr("KAI_COMPRESSOR_URL", "http://kai-compressor:8081"),
-    compressorTimeoutMs: num("KAI_COMPRESSOR_TIMEOUT_MS", 1, 12e4, 1500),
-    compressorMinQueryTokens: num("KAI_COMPRESSOR_MIN_QUERY_TOKENS", 0, 1e6, 10),
-    compressorMinPromptTokens: num("KAI_COMPRESSOR_MIN_PROMPT_TOKENS", 0, 1e6, 500),
-    compressorBudgetHaiku: num("KAI_COMPRESSOR_BUDGET_HAIKU", 0, 1e6, 3e3),
-    compressorBudgetSonnet: num("KAI_COMPRESSOR_BUDGET_SONNET", 0, 1e6, 1e4),
-    compressorBudgetOpus: num("KAI_COMPRESSOR_BUDGET_OPUS", 0, 1e6, 2e4),
-    routerHfRepo: env("KAI_ROUTER_HF_REPO"),
-    routerGguf: env("KAI_ROUTER_GGUF"),
-    routerMinBytes: num("KAI_ROUTER_MIN_BYTES", 1, 1e10),
-    compressorHfRepo: env("KAI_COMPRESSOR_HF_REPO"),
-    compressorGguf: env("KAI_COMPRESSOR_GGUF"),
-    compressorMinBytes: num("KAI_COMPRESSOR_MIN_BYTES", 1, 1e10),
-    runnerAllowNoToken,
-    runnerToken,
-    routerGitContext: env("KAI_ROUTER_GIT_CONTEXT"),
-    routerTimeoutMs: num("KAI_ROUTER_TIMEOUT_MS", 1, 12e4, 5e3),
-    logLevel: logLevel("KAI_LOG_LEVEL")
-  };
 }
 
 // src/log.ts
@@ -34311,29 +34271,104 @@ function errorMeta(error2) {
 }
 function createLogger2(component, level) {
   const enabled = {
-    debug: level === "debug",
-    info: level === "debug" || level === "info",
-    warn: true,
-    error: true
+    ["debug" /* Debug */]: level === "debug" /* Debug */,
+    ["info" /* Info */]: level === "debug" /* Debug */ || level === "info" /* Info */,
+    ["warn" /* Warn */]: true,
+    ["error" /* Error */]: true
+  };
+  const outputFor = {
+    ["debug" /* Debug */]: console.log,
+    ["info" /* Info */]: console.log,
+    ["warn" /* Warn */]: console.log,
+    ["error" /* Error */]: console.error
   };
   const write = (lvl, message, meta) => {
     if (!enabled[lvl]) return;
-    const line = encode(lvl, component, message, meta);
-    if (lvl === "error") {
-      console.error(line);
-    } else {
-      console.log(line);
-    }
+    outputFor[lvl](encode(lvl, component, message, meta));
   };
   return {
-    debug: (message, meta) => write("debug", message, meta),
-    info: (message, meta) => write("info", message, meta),
-    warn: (message, meta) => write("warn", message, meta),
-    error: (message, meta) => write("error", message, meta),
+    debug: (message, meta) => write("debug" /* Debug */, message, meta),
+    info: (message, meta) => write("info" /* Info */, message, meta),
+    warn: (message, meta) => write("warn" /* Warn */, message, meta),
+    error: (message, meta) => write("error" /* Error */, message, meta),
     fatal: (message, meta) => {
-      write("error", message, meta);
+      write("error" /* Error */, message, meta);
       throw new Error(message);
     }
+  };
+}
+function parseLogLevel2(raw) {
+  const level = raw.trim().toLowerCase();
+  if (level === "debug" /* Debug */) return "debug" /* Debug */;
+  if (level === "info" /* Info */) return "info" /* Info */;
+  if (level === "warn" /* Warn */) return "warn" /* Warn */;
+  if (level === "error" /* Error */) return "error" /* Error */;
+  throw new Error(`Invalid log level: ${raw}`);
+}
+
+// src/config.ts
+var COMPRESSOR_TIMEOUT_MS = 1500;
+var COMPRESSOR_MIN_QUERY_TOKENS = 10;
+var COMPRESSOR_MIN_PROMPT_TOKENS = 500;
+var COMPRESSOR_BUDGET_HAIKU = 3e3;
+var COMPRESSOR_BUDGET_SONNET = 1e4;
+var COMPRESSOR_BUDGET_OPUS = 2e4;
+var ROUTER_TIMEOUT_MS = 5e3;
+function env(name) {
+  const value = process.env[name];
+  if (!value || !value.trim()) throw new Error(`Missing required env: ${name}`);
+  return value.trim();
+}
+function optEnv(name) {
+  const value = process.env[name];
+  return value && value.trim() ? value.trim() : null;
+}
+function bool(name) {
+  const rawMaybe = process.env[name];
+  if (!rawMaybe || !rawMaybe.trim()) {
+    throw new Error(`Missing required env: ${name}`);
+  }
+  const raw = rawMaybe.trim().toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(`Invalid boolean for ${name}: ${raw}`);
+}
+function optBool(name) {
+  const rawMaybe = optEnv(name);
+  if (rawMaybe === null) return null;
+  const raw = rawMaybe.toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(`Invalid boolean for ${name}: ${raw}`);
+}
+function loadConfig() {
+  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN");
+  const runnerToken = optEnv("RUNNER_TOKEN");
+  if (!runnerAllowNoToken && !runnerToken) {
+    throw new Error("RUNNER_TOKEN is required unless KAI_RUNNER_ALLOW_NO_TOKEN=true");
+  }
+  return {
+    runtimeEnv: process.env,
+    reposPath: optEnv("KAI_REPOS_PATH"),
+    routerUrl: optEnv("KAI_ROUTER_URL"),
+    compressorUrl: optEnv("KAI_COMPRESSOR_URL"),
+    compressorDisabled: optBool("KAI_COMPRESSOR_DISABLE"),
+    auditDbPath: env("KAI_AUDIT_DB"),
+    compressorTimeoutMs: COMPRESSOR_TIMEOUT_MS,
+    compressorMinQueryTokens: COMPRESSOR_MIN_QUERY_TOKENS,
+    compressorMinPromptTokens: COMPRESSOR_MIN_PROMPT_TOKENS,
+    compressorBudgetHaiku: COMPRESSOR_BUDGET_HAIKU,
+    compressorBudgetSonnet: COMPRESSOR_BUDGET_SONNET,
+    compressorBudgetOpus: COMPRESSOR_BUDGET_OPUS,
+    runnerAllowNoToken,
+    runnerToken,
+    routerGitContext: env("KAI_ROUTER_GIT_CONTEXT"),
+    claudeSettingsPath: env("KAI_CLAUDE_SETTINGS_PATH"),
+    rtkHookSkipCheck: bool("KAI_RTK_HOOK_SKIP_CHECK"),
+    tierSuggestDisabled: bool("KAI_TIER_SUGGEST_DISABLE"),
+    debugCompressor: bool("KAI_DEBUG_COMPRESSOR"),
+    routerTimeoutMs: ROUTER_TIMEOUT_MS,
+    logLevel: parseLogLevel2(env("KAI_LOG_LEVEL"))
   };
 }
 
@@ -34384,16 +34419,6 @@ function detectAndRecordFollowup(db, sender, repo, prNumber) {
 }
 
 // src/audit.ts
-function envNumber(name, fallback) {
-  const raw = process.env[name];
-  if (!raw || !raw.trim()) {
-    if (fallback == null) throw new Error(`Missing required env: ${name}`);
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
-  return value;
-}
 var DEFAULT_RATE_LIMIT_SENDER_PER_HOUR = 20;
 var DEFAULT_RATE_LIMIT_REPO_PER_HOUR = 100;
 var DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY = 0.25;
@@ -34488,9 +34513,9 @@ function latestAuditId(db, sender, repoFull, prNumber) {
   }
 }
 function checkRateLimit(db, sender, repoFull, options = {}) {
-  const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR", DEFAULT_RATE_LIMIT_SENDER_PER_HOUR);
-  const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR", DEFAULT_RATE_LIMIT_REPO_PER_HOUR);
-  const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY);
+  const senderPerHour = DEFAULT_RATE_LIMIT_SENDER_PER_HOUR;
+  const repoPerHour = DEFAULT_RATE_LIMIT_REPO_PER_HOUR;
+  const senderCostPerDay = DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY;
   const includeCostBudget = options.includeCostBudget ?? true;
   if (!db) return { allowed: false, reason: "rate-limit database unavailable" };
   try {
@@ -34652,6 +34677,7 @@ function recordAuditCacheHit(db, auditId) {
 var core2 = __toESM(require_core());
 var import_node_child_process = require("node:child_process");
 var import_node_fs2 = require("node:fs");
+var import_node_path2 = require("node:path");
 
 // src/rtk.ts
 var RTK_NOT_TRACKED = "n/a";
@@ -34684,6 +34710,20 @@ var MAX_COST_USD_BY_TIER = {
   sonnet: 0.5,
   opus: 2
 };
+var CLI_FIXED_COST_RESERVE_USD_BY_TIER = {
+  haiku: 0.045,
+  sonnet: 0,
+  opus: 0
+};
+function pricingForTier(tier) {
+  return PRICING_USD_PER_MILLION[resolvePricingTier(tier)];
+}
+function capForTier(tier) {
+  return MAX_COST_USD_BY_TIER[resolvePricingTier(tier)];
+}
+function cliReserveForTier(tier) {
+  return CLI_FIXED_COST_RESERVE_USD_BY_TIER[resolvePricingTier(tier)];
+}
 function isShortAnswerRequest(message) {
   return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
 }
@@ -34709,9 +34749,9 @@ function resolvePricingTier(modelIdOrTier) {
 }
 function calculateAnthropicUsageCostUsd(modelIdOrTier, usage) {
   const tier = resolvePricingTier(modelIdOrTier);
-  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
-  const cacheCreation5m = usage.cacheCreation5mInputTokens ?? usage.cacheCreationInputTokens;
-  const cacheCreation1h = usage.cacheCreation1hInputTokens ?? 0;
+  const price = PRICING_USD_PER_MILLION[tier];
+  const cacheCreation5m = typeof usage.cacheCreation5mInputTokens === "number" ? usage.cacheCreation5mInputTokens : usage.cacheCreationInputTokens;
+  const cacheCreation1h = typeof usage.cacheCreation1hInputTokens === "number" ? usage.cacheCreation1hInputTokens : 0;
   const inputCost = usage.inputTokens * price.input / 1e6;
   const outputCost = usage.outputTokens * price.output / 1e6;
   const cacheReadCost = usage.cacheReadInputTokens * price.cacheRead / 1e6;
@@ -34737,11 +34777,12 @@ function preflightBudget(userMessage, promptTokens, tier) {
     };
   }
   const maxTurns = getMaxTurns(userMessage, tier);
-  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
+  const price = pricingForTier(tier);
+  const cliReserve = cliReserveForTier(tier);
   const worstInputCost = maxTurns * promptTokens * price.input / 1e6;
   const worstOutputCost = maxTurns * 1e3 * price.output / 1e6;
-  const worstTotal = worstInputCost + worstOutputCost;
-  const cap = MAX_COST_USD_BY_TIER[tier] ?? MAX_COST_USD_BY_TIER.haiku;
+  const worstTotal = cliReserve + worstInputCost + worstOutputCost;
+  const cap = capForTier(tier);
   if (worstTotal > cap) {
     return {
       allowed: false,
@@ -34813,6 +34854,10 @@ function parseCliJsonPayload(output) {
 var HEARTBEAT_INTERVAL_MS = 15e3;
 var CLI_TIMEOUT_MS = 3e5;
 var LOADING_GIF = "https://emojis.slackmojis.com/emojis/images/1643514453/4358/loading.gif?1643514453";
+var DEFAULT_CLEAN_MODEL_MESSAGE = "review this PR";
+var DEFAULT_CLI_NUM_TURNS = 1;
+var MAX_SAFE_UPDATE_ATTEMPTS = 3;
+var RETRY_STATUS_MIN = 500;
 var PHASES = [
   "Reading PR context",
   "Loading conversation history",
@@ -34830,16 +34875,30 @@ _Delete this comment to cancel._`;
 function isRootUser() {
   return process.getuid?.() === 0;
 }
-function requireRTKHookConfigured(logger = createLogger2("kai-runner", "info")) {
-  if (process.env.KAI_RTK_HOOK_SKIP_CHECK === "true") {
+function tierCostCap(modelTier) {
+  const cap = MAX_COST_USD_BY_TIER[modelTier];
+  if (typeof cap !== "number") throw new Error(`Unknown model tier for cost cap: ${modelTier}`);
+  return cap;
+}
+function firstString(values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return "";
+}
+function numberOrConstant(value, fallback) {
+  if (typeof value === "number") return value;
+  return fallback;
+}
+function requireRTKHookConfigured(config, logger) {
+  if (config.hookSkipCheck) {
     logger.warn("KAI_RTK_HOOK_SKIP_CHECK=true \u2014 skipping RTK hook verification");
     return;
   }
   const candidates = [
-    process.env.KAI_CLAUDE_SETTINGS_PATH,
-    `${process.env.HOME || "/home/kai"}/.claude/settings.json`,
-    "/home/kai/.claude/settings.json",
-    "/root/.claude/settings.json"
+    config.claudeSettingsPath,
+    (0, import_node_path2.join)("/home", "kai", ".claude", "settings.json"),
+    (0, import_node_path2.join)("/root", ".claude", "settings.json")
   ].filter((p) => !!p);
   for (const path2 of candidates) {
     if (!(0, import_node_fs2.existsSync)(path2)) continue;
@@ -34848,13 +34907,13 @@ function requireRTKHookConfigured(logger = createLogger2("kai-runner", "info")) 
   }
   throw new Error("RTK hook not configured in Claude settings.json");
 }
-function requireRTK() {
+function requireRTK(config) {
   const ver = (0, import_node_child_process.execSync)("rtk --version", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" }).trim();
   const help = (0, import_node_child_process.execSync)("rtk --help", { stdio: "pipe", timeout: 5e3, encoding: "utf-8" });
   if (!help.includes("rewrite")) {
     throw new Error("Wrong rtk binary (missing 'rewrite' command). Need rtk-ai/rtk, not crates.io rtk.");
   }
-  requireRTKHookConfigured();
+  requireRTKHookConfigured(config, createLogger2("kai-runner", "info" /* Info */));
   return ver;
 }
 function requireClaudeCLI() {
@@ -34864,7 +34923,11 @@ function parseModelFromMessage(message) {
   for (const tier of ["opus", "sonnet", "haiku"]) {
     const pattern = new RegExp(`use\\s+${tier}`, "i");
     if (pattern.test(message)) {
-      return { model: tier, cleanMessage: message.replace(pattern, "").trim() || "review this PR" };
+      const cleanMessage = message.replace(pattern, "").trim();
+      if (cleanMessage.length > 0) {
+        return { model: tier, cleanMessage };
+      }
+      return { model: tier, cleanMessage: DEFAULT_CLEAN_MODEL_MESSAGE };
     }
   }
   return { model: "haiku", cleanMessage: message };
@@ -34877,11 +34940,11 @@ function effortForTier(tier) {
   if (tier === "sonnet") return "medium";
   return "low";
 }
-async function callClaudeCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, heartbeat, db, runId, modelTier, disallowedTools = []) {
+async function callClaudeCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, heartbeat, db, runId, modelTier, disallowedTools, runtimeEnv) {
   const isRoot = isRootUser();
   sessionUpdate(db, runId, "cli-attempt-1", { attempt: 1 });
   try {
-    const result = await runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns, isRoot, heartbeat, db, runId, disallowedTools);
+    const result = await runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns, isRoot, heartbeat, db, runId, disallowedTools, runtimeEnv);
     sessionUpdate(db, runId, "completed", { status: "completed" });
     return result;
   } catch (e) {
@@ -34891,9 +34954,9 @@ async function callClaudeCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, hea
     throw e;
   }
 }
-async function runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns, isRoot, hb, db, runId, disallowedTools = []) {
+async function runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns, isRoot, hb, db, runId, disallowedTools, runtimeEnv) {
   return new Promise((resolve, reject) => {
-    const tierCapUsd = MAX_COST_USD_BY_TIER[modelTier] ?? MAX_COST_USD_BY_TIER.haiku;
+    const tierCapUsd = tierCostCap(modelTier);
     const claudeArgs = [
       "-p",
       "--dangerously-skip-permissions",
@@ -34917,7 +34980,7 @@ async function runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns,
       isRoot,
       apiKey,
       claudeArgs,
-      env: process.env
+      env: runtimeEnv
     });
     const child = (0, import_node_child_process.spawn)(spawnSpec.command, spawnSpec.args, { env: spawnSpec.env });
     child.stdin?.write(prompt);
@@ -34966,18 +35029,20 @@ async function runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns,
           rtkSavings = parseRtkSavings(raw);
         } catch {
         }
-        let resultText = json.result ?? json.content ?? "";
+        let resultText = firstString([json.result, json.content]);
         if (!resultText && json.is_error) {
-          resultText = `\u26A0\uFE0F Task incomplete (${json.subtype ?? "error"}): reached ${json.num_turns ?? "?"} turns. Ask me to continue or simplify the request.`;
+          const subtype = firstString([json.subtype, "error"]);
+          const numTurns = typeof json.num_turns === "number" ? String(json.num_turns) : "?";
+          resultText = `\u26A0\uFE0F Task incomplete (${subtype}): reached ${numTurns} turns. Ask me to continue or simplify the request.`;
         }
         if (!resultText) resultText = output;
-        const cacheRead = json.usage?.cache_read_input_tokens ?? 0;
-        const cacheWrite = json.usage?.cache_creation_input_tokens ?? 0;
+        const cacheRead = numberOrConstant(json.usage?.cache_read_input_tokens, 0);
+        const cacheWrite = numberOrConstant(json.usage?.cache_creation_input_tokens, 0);
         const cacheWrite5m = json.usage?.cache_creation?.ephemeral_5m_input_tokens;
         const cacheWrite1h = json.usage?.cache_creation?.ephemeral_1h_input_tokens;
-        const freshInput = json.usage?.input_tokens ?? 0;
-        const outputTokens = json.usage?.output_tokens ?? 0;
-        const providerCost = json.total_cost_usd ?? json.cost_usd;
+        const freshInput = numberOrConstant(json.usage?.input_tokens, 0);
+        const outputTokens = numberOrConstant(json.usage?.output_tokens, 0);
+        const providerCost = typeof json.total_cost_usd === "number" ? json.total_cost_usd : json.cost_usd;
         const computedCost = calculateAnthropicUsageCostUsd(modelId, {
           inputTokens: freshInput,
           outputTokens,
@@ -34986,14 +35051,15 @@ async function runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns,
           cacheCreation5mInputTokens: cacheWrite5m,
           cacheCreation1hInputTokens: cacheWrite1h
         });
+        const actualCost = typeof providerCost === "number" ? providerCost : computedCost;
         if (typeof providerCost === "number" && Math.abs(providerCost - computedCost) > 5e-3) {
           core2.warning(`Cost mismatch provider=${providerCost.toFixed(4)} computed=${computedCost.toFixed(4)}`);
         }
         settled = true;
         resolve({
           text: resultText,
-          costUsd: computedCost,
-          numTurns: json.num_turns ?? 1,
+          costUsd: actualCost,
+          numTurns: numberOrConstant(json.num_turns, DEFAULT_CLI_NUM_TURNS),
           inputTokens: freshInput + cacheRead + cacheWrite,
           outputTokens,
           cacheReadTokens: cacheRead,
@@ -35008,13 +35074,13 @@ async function runCLIWithHeartbeat(apiKey, modelId, modelTier, prompt, maxTurns,
   });
 }
 async function safeUpdate(o, owner, repo, id, body) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < MAX_SAFE_UPDATE_ATTEMPTS; attempt++) {
     try {
       await o.issues.updateComment({ owner, repo, comment_id: id, body });
       return;
     } catch (err) {
-      const st = typeof err === "object" && err !== null && "status" in err ? Number(err.status ?? 0) : 0;
-      if (st >= 500 && attempt < 2) {
+      const st = typeof err === "object" && err !== null && "status" in err ? numberOrConstant(err.status, 0) : 0;
+      if (st >= RETRY_STATUS_MIN && attempt < MAX_SAFE_UPDATE_ATTEMPTS - 1) {
         await new Promise((r) => setTimeout(r, 1e3 * Math.pow(2, attempt)));
         continue;
       }
@@ -35063,7 +35129,7 @@ async function getPullRequestDiffDigest(octokit, owner, repo, pullNumber, maxCha
 
 // src/repo-lookup.ts
 var import_node_fs3 = require("node:fs");
-var import_node_path2 = require("node:path");
+var import_node_path3 = require("node:path");
 var MAX_FILES = 2e3;
 var MAX_FILE_BYTES = 512e3;
 var SKIP_DIRS = /* @__PURE__ */ new Set([
@@ -35106,9 +35172,9 @@ function walkFiles(root) {
     if (!dir) continue;
     for (const entry of (0, import_node_fs3.readdirSync)(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) stack.push((0, import_node_path2.join)(dir, entry.name));
+        if (!SKIP_DIRS.has(entry.name)) stack.push((0, import_node_path3.join)(dir, entry.name));
       } else if (entry.isFile()) {
-        out.push((0, import_node_path2.join)(dir, entry.name));
+        out.push((0, import_node_path3.join)(dir, entry.name));
         if (out.length >= MAX_FILES) break;
       }
     }
@@ -35129,7 +35195,7 @@ function findEntrypoint(serviceDir) {
           return {
             scannedFiles,
             hit: {
-              filePath: `repos/${(0, import_node_path2.relative)((0, import_node_path2.join)(serviceDir, ".."), file)}`,
+              filePath: `repos/${(0, import_node_path3.relative)((0, import_node_path3.join)(serviceDir, ".."), file)}`,
               line: index + 1,
               evidence: line.trim(),
               framework
@@ -35145,7 +35211,7 @@ function answerRepoLookup(message, reposPath = "repos") {
   if (!isHttpEntrypointLookup(message)) return null;
   const service = parseServiceName(message);
   if (!service) return null;
-  const serviceDir = (0, import_node_path2.join)(reposPath, service);
+  const serviceDir = (0, import_node_path3.join)(reposPath, service);
   if (!(0, import_node_fs3.existsSync)(serviceDir) || !(0, import_node_fs3.statSync)(serviceDir).isDirectory()) return null;
   const result = findEntrypoint(serviceDir);
   if (!result) return null;
@@ -35160,12 +35226,15 @@ Evidence: \`${hit.evidence}\``
 }
 
 // src/index.ts
-function requireReposPath() {
-  const value = core3.getInput("repos_path") || process.env.KAI_REPOS_PATH;
-  if (!value || !value.trim()) {
-    throw new Error("Missing required repos path: set action input repos_path or env KAI_REPOS_PATH");
+function requireReposPath(cfg) {
+  const value = optionalInput("repos_path");
+  if (value !== null) {
+    return value;
   }
-  return value.trim();
+  if (cfg.reposPath !== null) {
+    return cfg.reposPath;
+  }
+  throw new Error("Missing required repos path: set action input repos_path or env KAI_REPOS_PATH");
 }
 function ensureLocalReposDirectory(reposPath) {
   const target = reposPath.trim();
@@ -35182,7 +35251,7 @@ function ensureLocalReposDirectory(reposPath) {
   }
   (0, import_node_fs4.symlinkSync)(target, localPath, "dir");
 }
-async function getPRCommentsContext(octokit, owner, repo, issueNumber, maxComments = 5, maxChars = 200) {
+async function getPRCommentsContext(octokit, owner, repo, issueNumber, maxComments, maxChars) {
   try {
     const { data: comments } = await octokit.issues.listComments({
       owner,
@@ -35201,15 +35270,22 @@ async function getPRCommentsContext(octokit, owner, repo, issueNumber, maxCommen
     return "";
   }
 }
-var rawLogLevel = (process.env.KAI_LOG_LEVEL || "info").toLowerCase();
-var safeLogLevel = rawLogLevel === "debug" || rawLogLevel === "warn" || rawLogLevel === "error" ? rawLogLevel : "info";
-var log = createLogger2("kai-action", safeLogLevel);
+var log = null;
 var MODELS = {
   haiku: { id: "claude-haiku-4-5-20251001", label: "Haiku" },
   sonnet: { id: "claude-sonnet-4-20250514", label: "Sonnet" },
   opus: { id: "claude-opus-4-20250514", label: "Opus" }
 };
 var LOCAL_LLM_MODEL = "LFM2-350M";
+var DEFAULT_TRIGGER_PHRASE = "@kai";
+var COMMENT_CONTEXT_SIMPLE_MAX_COMMENTS = 2;
+var COMMENT_CONTEXT_DEFAULT_MAX_COMMENTS = 5;
+var COMMENT_CONTEXT_COMMIT_MAX_COMMENTS = 3;
+var COMMENT_CONTEXT_SIMPLE_MAX_CHARS = 160;
+var COMMENT_CONTEXT_DEFAULT_MAX_CHARS = 220;
+var FILE_FOCUS_MAX_FILES = 5;
+var EMPTY_MESSAGE_LABEL = "(empty)";
+var TRIGGER_MESSAGE_LABEL = "(trigger)";
 var KODIF_ARCH_CONTEXT = `
 Kodif platform: 33+ microservices. Architecture repo: kodif-team/architect
 DBs: executor-db (kodif, PostgreSQL 13), chat-db (chat, PostgreSQL 15), ml-db (zendesk-json-db-pgadmin, PostgreSQL 13). All sync to BigQuery (kodif-51ce2, public dataset).
@@ -35223,6 +35299,112 @@ function isArchitectureQuestion(msg) {
 }
 function shellQuote(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+function optionalInput(name) {
+  const value = core3.getInput(name);
+  if (!value || !value.trim()) return null;
+  return value.trim();
+}
+function requireInput(name) {
+  const value = optionalInput(name);
+  if (value === null) throw new Error(`Missing required input: ${name}`);
+  return value;
+}
+function inputOrConstant(inputName, fallback) {
+  const value = optionalInput(inputName);
+  if (value !== null) return value;
+  return fallback;
+}
+function inputOrConfig(inputName, configValue) {
+  const inputValue = optionalInput(inputName);
+  if (inputValue !== null) return inputValue;
+  if (configValue !== null) return configValue;
+  throw new Error(`Missing required input/config: ${inputName}`);
+}
+function parseBooleanValue(name, raw) {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`Invalid boolean for ${name}: ${raw}`);
+}
+function inputOrConfigBoolean(inputName, configValue) {
+  const inputValue = optionalInput(inputName);
+  if (inputValue !== null) return parseBooleanValue(inputName, inputValue);
+  if (configValue !== null) return configValue;
+  throw new Error(`Missing required input/config boolean: ${inputName}`);
+}
+function parseNumberValue(name, raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
+  return value;
+}
+function inputOrConfigNumber(inputName, configValue) {
+  const inputValue = optionalInput(inputName);
+  if (inputValue === null) return configValue;
+  return parseNumberValue(inputName, inputValue);
+}
+function displayMessage(message, fallback) {
+  if (message.trim().length > 0) return message;
+  return fallback;
+}
+function promptRuleText(archTask, shortAnswer, commitExpected) {
+  if (archTask) {
+    return "Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.";
+  }
+  if (shortAnswer) {
+    return "This is a short-answer task. Produce the final one-sentence answer now. Do NOT open any file.";
+  }
+  if (commitExpected) {
+    return "Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.";
+  }
+  return "Read-only task. Do NOT edit files, commit, or push. Satisfy the task from the selected context and report concrete evidence. Answer EXACTLY what the user asked.";
+}
+function commentContextLimits(route) {
+  if (route.intent === "simple-answer") {
+    return {
+      maxComments: COMMENT_CONTEXT_SIMPLE_MAX_COMMENTS,
+      maxChars: COMMENT_CONTEXT_SIMPLE_MAX_CHARS
+    };
+  }
+  if (route.commitExpected) {
+    return {
+      maxComments: COMMENT_CONTEXT_COMMIT_MAX_COMMENTS,
+      maxChars: COMMENT_CONTEXT_DEFAULT_MAX_CHARS
+    };
+  }
+  return {
+    maxComments: COMMENT_CONTEXT_DEFAULT_MAX_COMMENTS,
+    maxChars: COMMENT_CONTEXT_DEFAULT_MAX_CHARS
+  };
+}
+function selectedTier(suggestedTier, parsedTier) {
+  if (suggestedTier !== null) return suggestedTier;
+  return parsedTier;
+}
+function preflightHint(kind, finalPromptTokens, modelTier) {
+  if (kind === "hard-ceiling") {
+    return `Prompt (${finalPromptTokens} tokens) exceeds the ${MAX_PROMPT_TOKENS2}-token hard ceiling. Split the request into smaller tasks.`;
+  }
+  if (escalationTierSequence(modelTier).length === 0) {
+    return "Even the highest tier cannot handle this prompt size. Reduce context.";
+  }
+  return "Even the highest tier that passed budget checks cannot handle this prompt size. Reduce context.";
+}
+function finalAuditStatus(costOverCap, rtkBypassed) {
+  if (costOverCap) return "completed-cost-over-cap";
+  if (rtkBypassed) return "completed-rtk-bypass";
+  return "completed";
+}
+function tierCostCap2(modelTier) {
+  const cap = MAX_COST_USD_BY_TIER2[modelTier];
+  if (typeof cap !== "number") throw new Error(`Unknown model tier for cost cap: ${modelTier}`);
+  return cap;
+}
+function repoServiceName2(repoFullName) {
+  return import_node_path4.posix.basename(repoFullName);
+}
+function githubRemoteUrl(owner, repo) {
+  return new URL(import_node_path4.posix.join(owner, repo) + ".git", "https://github.com/").toString();
 }
 function logErrorToSentry(error2, extra) {
   const sentry = globalThis.Sentry;
@@ -35321,7 +35503,7 @@ function buildCLIPrompt(userMessage, prTitle, prBody, filesList, prCommentsConte
   const archTask = isArchitectureQuestion(userMessage);
   const shortAnswer = isShortAnswerRequest2(userMessage);
   const stable = [
-    `Kai, AI code reviewer. Service: repos/${repoFullName.split("/").pop()}. PR: "${prTitle}"`
+    `Kai, AI code reviewer. Service: repos/${repoServiceName2(repoFullName)}. PR: "${prTitle}"`
   ];
   if (prBody) stable.push(`Desc: ${prBody.slice(0, 300)}`);
   stable.push(`Files:
@@ -35348,7 +35530,7 @@ ${KODIF_ARCH_CONTEXT}`);
 ${prCommentsContext}`);
   dynamic.push(
     `Task: ${userMessage}`,
-    archTask ? `Rules: concise, markdown, max 50 lines. Focus on architecture, services, connections.` : shortAnswer ? `This is a short-answer task. Produce the final one-sentence answer now. Do NOT open any file.` : route.commitExpected ? `Success criteria: satisfy the task, stay within the selected context, and report concrete evidence. Answer EXACTLY what the user asked.` : `Read-only task. Do NOT edit files, commit, or push. Satisfy the task from the selected context and report concrete evidence. Answer EXACTLY what the user asked.`
+    promptRuleText(archTask, shortAnswer, route.commitExpected)
   );
   return buildCacheFriendlyPrompt({ stable, dynamic });
 }
@@ -35367,20 +35549,23 @@ async function run() {
   let octokit = null;
   let owner = "", repo = "", replyCommentId = 0;
   let sender = "", rawMessage = "";
+  let auditDbPath = null;
   try {
     const cfg = loadConfig();
-    const reposPath = requireReposPath();
+    auditDbPath = cfg.auditDbPath;
+    log = createLogger2("kai-action", cfg.logLevel);
+    const reposPath = requireReposPath(cfg);
     ensureLocalReposDirectory(reposPath);
-    const trigger = core3.getInput("trigger_phrase") || "@kai";
-    const githubToken = core3.getInput("github_token");
-    const anthropicApiKey = core3.getInput("anthropic_api_key");
-    const routerUrl = core3.getInput("router_url") || cfg.routerUrl;
+    const trigger = inputOrConstant("trigger_phrase", DEFAULT_TRIGGER_PHRASE);
+    const githubToken = requireInput("github_token");
+    const anthropicApiKey = optionalInput("anthropic_api_key");
+    const routerUrl = inputOrConfig("router_url", cfg.routerUrl);
     const routerModel = LOCAL_LLM_MODEL;
-    const compressorUrl = core3.getInput("compressor_url") || cfg.compressorUrl;
+    const compressorUrl = inputOrConfig("compressor_url", cfg.compressorUrl);
     const compressorModel = LOCAL_LLM_MODEL;
-    const compressorDisabled = (core3.getInput("compressor_disable") || process.env.KAI_COMPRESSOR_DISABLE || "false").toLowerCase() === "true";
-    const compressorMinQueryTokens = Number(core3.getInput("compressor_min_query_tokens") || cfg.compressorMinQueryTokens);
-    const compressorMinPromptTokens = Number(core3.getInput("compressor_min_prompt_tokens") || cfg.compressorMinPromptTokens);
+    const compressorDisabled = inputOrConfigBoolean("compressor_disable", cfg.compressorDisabled);
+    const compressorMinQueryTokens = inputOrConfigNumber("compressor_min_query_tokens", cfg.compressorMinQueryTokens);
+    const compressorMinPromptTokens = inputOrConfigNumber("compressor_min_prompt_tokens", cfg.compressorMinPromptTokens);
     const { context: context2 } = github;
     const event = context2.eventName;
     let commentBody = "", commentId = 0, issueNumber = 0;
@@ -35389,7 +35574,11 @@ async function run() {
       commentBody = payload.comment?.body ?? "";
       commentId = payload.comment?.id ?? 0;
       sender = payload.comment?.user?.login ?? "";
-      issueNumber = event === "issue_comment" ? payload.issue?.number ?? 0 : payload.pull_request?.number ?? 0;
+      if (event === "issue_comment") {
+        issueNumber = payload.issue?.number ?? 0;
+      } else {
+        issueNumber = payload.pull_request?.number ?? 0;
+      }
     }
     if (!commentBody.toLowerCase().includes(trigger.toLowerCase())) return;
     if (sender.includes("[bot]")) return;
@@ -35401,7 +35590,7 @@ async function run() {
     const { model: parsedTier, cleanMessage: userMessage } = parseModelFromMessage(rawMessage);
     const userSpecifiedTier = /\buse\s+(haiku|sonnet|opus)\b/i.test(rawMessage);
     let suggestedTier = null;
-    const tierSuggestDisabled = process.env.KAI_TIER_SUGGEST_DISABLE === "true" || !!routerUrl && !!compressorUrl && routerUrl === compressorUrl;
+    const tierSuggestDisabled = cfg.tierSuggestDisabled || !!routerUrl && !!compressorUrl && routerUrl === compressorUrl;
     if (!userSpecifiedTier && routerUrl && !tierSuggestDisabled) {
       try {
         suggestedTier = await suggestTierWithLocalLLM(userMessage, {
@@ -35414,14 +35603,14 @@ async function run() {
         core3.warning(`Tier suggest failed: ${e}`);
       }
     }
-    const requestedTier = suggestedTier ?? parsedTier;
+    const requestedTier = selectedTier(suggestedTier, parsedTier);
     const modelTier = requestedTier;
     const selectedModel = MODELS[modelTier];
     const tierNotice = "";
     const route = await routeEventWithLocalLLM(userMessage, modelTier, {
       url: routerUrl,
       model: routerModel,
-      timeoutMs: 5e3
+      timeoutMs: cfg.routerTimeoutMs
     });
     core3.info(`Triggered by @${sender} in #${issueNumber}`);
     core3.info(`Router: ${route.intent} -> ${route.decision} (${route.reason}, confidence ${route.confidence})`);
@@ -35488,7 +35677,7 @@ async function run() {
         owner,
         repo,
         issue_number: issueNumber,
-        body: `> @${sender}: ${rawMessage || "(empty)"}
+        body: `> @${sender}: ${displayMessage(rawMessage, EMPTY_MESSAGE_LABEL)}
 
 I need a specific target and expected outcome before spending model tokens. Please include the file, failure, PR, or change you want.
 
@@ -35631,7 +35820,10 @@ ${localLookup.answer}
       return;
     }
     requireClaudeCLI();
-    const rtkVersion = requireRTK();
+    const rtkVersion = requireRTK({
+      claudeSettingsPath: cfg.claudeSettingsPath,
+      hookSkipCheck: cfg.rtkHookSkipCheck
+    });
     const modeLabel = "CLI + RTK";
     core3.info(`Mode: ${modeLabel} | Model: ${selectedModel.label} | RTK: ${rtkVersion}`);
     const { data: reply } = await octokit.issues.createComment({
@@ -35658,7 +35850,7 @@ ${localLookup.answer}
           stdio: "pipe",
           timeout: 5e3
         });
-        (0, import_node_child_process2.execSync)(`git remote set-url origin https://github.com/${owner}/${repo}.git`, {
+        (0, import_node_child_process2.execSync)(`git remote set-url origin ${shellQuote(githubRemoteUrl(owner, repo))}`, {
           stdio: "pipe",
           timeout: 5e3
         });
@@ -35671,9 +35863,15 @@ ${localLookup.answer}
       filesList = files.map((f) => `${f.filename} +${f.additions}/-${f.deletions}`).join("\n");
       prDiffDigest = await getPullRequestDiffDigest(octokit, owner, repo, issueNumber, MAX_DIFF_CHARS);
       if (prDiffDigest) core3.info(`PR API diff digest attached: ${prDiffDigest.length} chars`);
-      const commentWindow = route.intent === "simple-answer" ? 2 : route.commitExpected ? 3 : 5;
-      const commentChars = route.intent === "simple-answer" ? 160 : 220;
-      prCommentsContext = await getPRCommentsContext(octokit, owner, repo, issueNumber, commentWindow, commentChars);
+      const commentLimits = commentContextLimits(route);
+      prCommentsContext = await getPRCommentsContext(
+        octokit,
+        owner,
+        repo,
+        issueNumber,
+        commentLimits.maxComments,
+        commentLimits.maxChars
+      );
       sessionUpdate(auditDb, runId, "context-loaded");
     } catch (e) {
       core3.warning(`PR context error: ${e instanceof Error ? e.message : e}`);
@@ -35738,7 +35936,7 @@ ${filesList}`;
             url: compressorUrl,
             model: compressorModel,
             timeoutMs: cfg.routerTimeoutMs,
-            maxFiles: 5
+            maxFiles: FILE_FOCUS_MAX_FILES
           });
           if (focusedFiles.length) core3.info(`File focus: ${focusedFiles.join(", ")}`);
         } catch (e) {
@@ -35809,6 +36007,7 @@ ${cached.reply}
           disabled: compressorDisabled,
           minQueryTokens: compressorMinQueryTokens,
           minPromptTokens: compressorMinPromptTokens,
+          debug: cfg.debugCompressor,
           budgetByTier: {
             haiku: cfg.compressorBudgetHaiku,
             sonnet: cfg.compressorBudgetSonnet,
@@ -35897,7 +36096,7 @@ ${cached.reply}
       }
       if (!preflight.allowed) {
         const elapsedSec = Math.round((Date.now() - startTime) / 1e3);
-        const hint = preflight.kind === "hard-ceiling" ? `Prompt (${finalPromptTokens} tokens) exceeds the ${MAX_PROMPT_TOKENS2}-token hard ceiling. Split the request into smaller tasks.` : escalationTierSequence(modelTier).length === 0 ? `Even the highest tier cannot handle this prompt size. Reduce context.` : `Even the highest tier that passed budget checks cannot handle this prompt size. Reduce context.`;
+        const hint = preflightHint(preflight.kind, finalPromptTokens, modelTier);
         result = `\u26D4 Pre-flight refused: ${preflight.reason}.
 
 ${hint}`;
@@ -35957,7 +36156,8 @@ ${result}
         auditDb,
         runId,
         activeTier,
-        disallowed
+        disallowed,
+        cfg.runtimeEnv
       );
       result = r.text;
       let commitVerifiedOutcome = null;
@@ -35984,7 +36184,7 @@ ${result}
 
 > \u26A0\uFE0F **RTK bypassed** \u2014 no token savings recorded for this call. Operator: verify hook in \`$HOME/.claude/settings.json\`.`;
       }
-      const costCap = MAX_COST_USD_BY_TIER2[modelTier] ?? MAX_COST_USD_BY_TIER2.haiku;
+      const costCap = tierCostCap2(modelTier);
       const costOverCap = r.costUsd > costCap;
       if (costOverCap) {
         core3.error(`Post-call cost over cap: $${r.costUsd.toFixed(4)} > $${costCap} (${modelTier})`);
@@ -36001,7 +36201,7 @@ ${result}
         durationSec,
         r.cacheReadTokens
       );
-      const finalStatus = costOverCap ? "completed-cost-over-cap" : r.rtkSavings === "0.0%" ? "completed-rtk-bypass" : "completed";
+      const finalStatus = finalAuditStatus(costOverCap, rtkBypassed);
       auditLog(auditDb, {
         sender,
         repo: `${owner}/${repo}`,
@@ -36055,7 +36255,11 @@ ${result}
     core3.info("Done");
   } catch (error2) {
     const msg = error2 instanceof Error ? error2.message : String(error2);
-    log.error("kai-action failed", { ...errorMeta(error2), message: msg, owner, repo, sender });
+    if (log) {
+      log.error("kai-action failed", { ...errorMeta(error2), message: msg, owner, repo, sender });
+    } else {
+      core3.error(`kai-action failed: ${msg}`);
+    }
     logErrorToSentry(error2, {
       subsystem: "kai-action-run",
       owner,
@@ -36063,9 +36267,10 @@ ${result}
       sender
     });
     try {
-      const db = initAuditDb(process.env.KAI_AUDIT_DB || "/home/kai/data/kai-audit.db");
+      if (auditDbPath === null) throw new Error("audit DB path unavailable");
+      const db = initAuditDb(auditDbPath);
       auditLog(db, {
-        sender: sender || "unknown",
+        sender: displayMessage(sender, "unknown"),
         repo: owner && repo ? `${owner}/${repo}` : "unknown",
         prNumber: 0,
         model: "unknown",
@@ -36077,7 +36282,7 @@ ${result}
     }
     if (octokit && owner && repo) {
       const routerHint = msg.includes("local router") ? "\n\n**Root cause (captured from runner):** the LLM containers are unreachable AND the runner user cannot access `/var/run/docker.sock` to restart them (owned `root:992`, runner user `kai` only in group `1001`).\n\n**Operator fix \u2014 one of:**\n1. Rebuild runner image with `usermod -aG 992 kai` (or `--group-add 992` in `docker run`).\n2. Or make the runner LLM containers restart themselves via `restart: always` in docker-compose + a host-level watchdog.\n3. Or expose a small privileged sidecar that restarts siblings; give `kai` user access to that control plane instead of the docker socket." : "";
-      const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}
+      const errorBody = `> @${sender}: ${displayMessage(rawMessage, TRIGGER_MESSAGE_LABEL)}
 
 \u26A0\uFE0F **Kai error:**
 \`\`\`

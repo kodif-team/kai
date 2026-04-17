@@ -23,6 +23,7 @@ const prompt = [
     timeoutMs: 60000,
     budgetByTier: { haiku: 50 }, // force compression
     minPromptTokens: 100,
+    debug: false,
   });
   console.log("metrics:", JSON.stringify(res.metrics));
   console.log("compressed len:", res.prompt.length, "(from", prompt.length, ")");

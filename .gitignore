@@ -3,6 +3,7 @@ dist/
 .claude-flow/
 .env
 .env.local
+.deploy.env*
 *.log
 .DS_Store
 tmp/

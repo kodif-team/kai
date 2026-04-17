@@ -9,7 +9,7 @@ services:
       - kai-router-gguf:/models
     command:
       - -m
-      - /models/${KAI_ROUTER_GGUF}
+      - /models/LFM2-350M-Q4_0.gguf
       - --host
       - 0.0.0.0
       - --port
@@ -33,27 +33,26 @@ services:
     image: alpine:latest
     volumes:
       - kai-router-gguf:/models
-    environment:
-      KAI_ROUTER_HF_REPO: ${KAI_ROUTER_HF_REPO}
-      KAI_ROUTER_GGUF: ${KAI_ROUTER_GGUF}
-      KAI_ROUTER_MIN_BYTES: ${KAI_ROUTER_MIN_BYTES}
     command:
       - sh
       - -c
       - |
         set -e
         apk add -q curl
-        if [ ! -f "/models/$${KAI_ROUTER_GGUF}" ]; then
-          echo "Downloading $${KAI_ROUTER_GGUF} from $${KAI_ROUTER_HF_REPO}..."
-          curl -fL -o "/models/$${KAI_ROUTER_GGUF}.tmp" \
-            "https://huggingface.co/$${KAI_ROUTER_HF_REPO}/resolve/main/$${KAI_ROUTER_GGUF}"
-          BYTES=$(wc -c < "/models/$${KAI_ROUTER_GGUF}.tmp")
-          if [ "$${BYTES}" -lt "$${KAI_ROUTER_MIN_BYTES}" ]; then
-            echo "Downloaded router model is too small ($${BYTES} bytes), expected >= $${KAI_ROUTER_MIN_BYTES}" >&2
-            rm -f "/models/$${KAI_ROUTER_GGUF}.tmp"
+        GGUF="LFM2-350M-Q4_0.gguf"
+        HF_REPO="LiquidAI/LFM2-350M-GGUF"
+        MIN_BYTES="100000000"
+        if [ ! -f "/models/$${GGUF}" ]; then
+          echo "Downloading $${GGUF} from $${HF_REPO}..."
+          curl -fL -o "/models/$${GGUF}.tmp" \
+            "https://huggingface.co/$${HF_REPO}/resolve/main/$${GGUF}"
+          BYTES=$(wc -c < "/models/$${GGUF}.tmp")
+          if [ "$${BYTES}" -lt "$${MIN_BYTES}" ]; then
+            echo "Downloaded router model is too small ($${BYTES} bytes), expected >= $${MIN_BYTES}" >&2
+            rm -f "/models/$${GGUF}.tmp"
             exit 1
           fi
-          mv "/models/$${KAI_ROUTER_GGUF}.tmp" "/models/$${KAI_ROUTER_GGUF}"
+          mv "/models/$${GGUF}.tmp" "/models/$${GGUF}"
         fi
         ls -lh /models/
     restart: "no"
@@ -70,7 +69,7 @@ services:
       - kai-compressor-gguf:/models
     command:
       - -m
-      - /models/${KAI_COMPRESSOR_GGUF}
+      - /models/LFM2-350M-Q4_0.gguf
       - --host
       - 0.0.0.0
       - --port
@@ -94,27 +93,26 @@ services:
     image: alpine:latest
     volumes:
       - kai-compressor-gguf:/models
-    environment:
-      KAI_COMPRESSOR_HF_REPO: ${KAI_COMPRESSOR_HF_REPO}
-      KAI_COMPRESSOR_GGUF: ${KAI_COMPRESSOR_GGUF}
-      KAI_COMPRESSOR_MIN_BYTES: ${KAI_COMPRESSOR_MIN_BYTES}
     command:
       - sh
       - -c
       - |
         set -e
         apk add -q curl
-        if [ ! -f "/models/$${KAI_COMPRESSOR_GGUF}" ]; then
-          echo "Downloading $${KAI_COMPRESSOR_GGUF} from $${KAI_COMPRESSOR_HF_REPO}..."
-          curl -fL -o "/models/$${KAI_COMPRESSOR_GGUF}.tmp" \
-            "https://huggingface.co/$${KAI_COMPRESSOR_HF_REPO}/resolve/main/$${KAI_COMPRESSOR_GGUF}"
-          BYTES=$(wc -c < "/models/$${KAI_COMPRESSOR_GGUF}.tmp")
-          if [ "$${BYTES}" -lt "$${KAI_COMPRESSOR_MIN_BYTES}" ]; then
-            echo "Downloaded compressor model is too small ($${BYTES} bytes), expected >= $${KAI_COMPRESSOR_MIN_BYTES}" >&2
-            rm -f "/models/$${KAI_COMPRESSOR_GGUF}.tmp"
+        GGUF="LFM2-350M-Q4_0.gguf"
+        HF_REPO="LiquidAI/LFM2-350M-GGUF"
+        MIN_BYTES="100000000"
+        if [ ! -f "/models/$${GGUF}" ]; then
+          echo "Downloading $${GGUF} from $${HF_REPO}..."
+          curl -fL -o "/models/$${GGUF}.tmp" \
+            "https://huggingface.co/$${HF_REPO}/resolve/main/$${GGUF}"
+          BYTES=$(wc -c < "/models/$${GGUF}.tmp")
+          if [ "$${BYTES}" -lt "$${MIN_BYTES}" ]; then
+            echo "Downloaded compressor model is too small ($${BYTES} bytes), expected >= $${MIN_BYTES}" >&2
+            rm -f "/models/$${GGUF}.tmp"
             exit 1
           fi
-          mv "/models/$${KAI_COMPRESSOR_GGUF}.tmp" "/models/$${KAI_COMPRESSOR_GGUF}"
+          mv "/models/$${GGUF}.tmp" "/models/$${GGUF}"
         fi
         ls -lh /models/
     restart: "no"

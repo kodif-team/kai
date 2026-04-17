@@ -133,6 +133,16 @@ const TIER_RESPONSE_FORMAT = {
   },
 };
 
+function chatCompletionsUrl(baseUrl: string): string {
+  return new URL("/v1/chat/completions", baseUrl).toString();
+}
+
+function responseContent(body: { choices?: Array<{ message?: { content?: string } }> }): string {
+  const content = body.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  return "";
+}
+
 export async function suggestTierWithLocalLLM(
   message: string,
   options: { url: string; model?: string; timeoutMs?: number },
@@ -141,7 +151,7 @@ export async function suggestTierWithLocalLLM(
   if (options.timeoutMs == null) throw new Error("KAI_ROUTER_TIMEOUT_MS is required");
   const signal = AbortSignal.timeout(options.timeoutMs);
   try {
-    const res = await fetch(`${options.url.replace(/\/$/, "")}/v1/chat/completions`, {
+    const res = await fetch(chatCompletionsUrl(options.url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -159,11 +169,14 @@ export async function suggestTierWithLocalLLM(
     });
     if (!res.ok) return null;
     const body = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const content = body.choices?.[0]?.message?.content ?? "";
+    const content = responseContent(body);
     try {
       const parsed = parseJsonObject(content);
       if (!isRecord(parsed) || typeof parsed.tier !== "string") return null;
-      return TIER_VALUES.includes(parsed.tier as SuggestedTier) ? parsed.tier as SuggestedTier : null;
+      if (TIER_VALUES.includes(parsed.tier as SuggestedTier)) {
+        return parsed.tier as SuggestedTier;
+      }
+      return null;
     } catch { return null; }
   } catch {
     return null;
@@ -213,7 +226,7 @@ async function callRouterOnce(
   url: string, model: string, messages: ChatMessage[], timeoutMs: number,
 ): Promise<RouterIntent> {
   const signal = AbortSignal.timeout(timeoutMs);
-  const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+  const res = await fetch(chatCompletionsUrl(url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -224,7 +237,7 @@ async function callRouterOnce(
   });
   if (!res.ok) throw new LocalRouterUnavailableError(`HTTP ${res.status}`);
   const body = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const content = body.choices?.[0]?.message?.content ?? "";
+  const content = responseContent(body);
   const intent = parseIntentOnly(content);
   if (!intent) throw new LocalRouterUnavailableError("invalid intent payload");
   return intent;
@@ -233,19 +246,15 @@ async function callRouterOnce(
 export async function routeEventWithLocalLLM(
   rawMessage: string,
   modelTier: string,
-  options?: { url?: string; model?: string; timeoutMs?: number },
+  options: { url: string; model?: string; timeoutMs?: number },
 ): Promise<RouterDecision> {
   const rules = routeEvent(rawMessage, modelTier);
 
   // Deterministic rule-only paths skip the LLM entirely.
   if (rules.decision !== "call-model") return rules;
 
-  const url = options?.url ?? process.env.KAI_ROUTER_URL;
-  if (!url) {
-    throw new LocalRouterUnavailableError("local router URL is required before paid model calls");
-  }
-
-  if (!options) throw new LocalRouterUnavailableError("router options are required");
+  const url = options.url;
+  if (!url) throw new LocalRouterUnavailableError("local router URL is required before paid model calls");
   const model = options.model;
   if (!model) throw new LocalRouterUnavailableError("local router model is required");
   if (options.timeoutMs == null) throw new Error("router timeout is required");

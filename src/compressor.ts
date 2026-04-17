@@ -10,6 +10,7 @@ export type CompressionConfig = {
   minPromptTokens?: number;
   minQueryTokens?: number;
   budgetByTier?: Partial<Record<CompressionTier, number>>;
+  debug: boolean;
 };
 
 export type CompressionMetrics = {
@@ -91,12 +92,12 @@ export function splitPromptIntoChunks(prompt: string): PromptChunk[] {
   return chunks;
 }
 
-function parseCompressorPayload(raw: string, maxChunkId: number): CompressorPayload {
+function parseCompressorPayload(raw: string, maxChunkId: number, debug: boolean): CompressorPayload {
   let parsed: unknown;
   try {
     parsed = parseJsonObject(raw);
   } catch {
-    if (process.env.KAI_DEBUG_COMPRESSOR === "1") {
+    if (debug) {
       console.error("[kai-compressor] raw response (first 400 chars):", raw.slice(0, 400));
     }
     throw new LocalCompressorUnavailableError("local compressor returned invalid JSON");
@@ -186,6 +187,16 @@ const COMPRESSOR_RESPONSE_FORMAT = {
   },
 };
 
+function chatCompletionsUrl(baseUrl: string): string {
+  return new URL("/v1/chat/completions", baseUrl).toString();
+}
+
+function responseContent(body: { choices?: Array<{ message?: { content?: string } }> }): string {
+  const content = body.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  return "";
+}
+
 function mergeCompressedChunks(chunks: PromptChunk[], payload: CompressorPayload): string {
   const keepIds = new Set(payload.keep_ids);
   const summaryById = new Map((payload.summaries ?? []).map((item) => [item.id, item.text.trim()]));
@@ -254,7 +265,7 @@ export async function compressPromptWithQwen(
   }
 
   const signal = AbortSignal.timeout(config.timeoutMs);
-  const response = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+  const response = await fetch(chatCompletionsUrl(url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -275,8 +286,8 @@ export async function compressPromptWithQwen(
   }
 
   const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const content = body.choices?.[0]?.message?.content ?? "";
-  const parsed = parseCompressorPayload(content, chunks.length);
+  const content = responseContent(body);
+  const parsed = parseCompressorPayload(content, chunks.length, config.debug);
   const merged = mergeCompressedChunks(chunks, parsed);
   if (!merged.trim()) {
     throw new LocalCompressorUnavailableError("local compressor returned empty merged prompt");

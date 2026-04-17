@@ -15,6 +15,7 @@ let MAX_COST_USD_BY_TIER: Record<string, number>;
 let MAX_PROMPT_TOKENS: number;
 let PRICING_USD_PER_MILLION: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }>;
 let SHORT_ANSWER_MAX_INPUT_TOKENS: number;
+let CLI_FIXED_COST_RESERVE_USD_BY_TIER: Record<string, number>;
 let disallowedToolsFor: typeof import("../dist/budget.js").disallowedToolsFor;
 let getMaxTurns: typeof import("../dist/budget.js").getMaxTurns;
 let isShortAnswerRequest: typeof import("../dist/budget.js").isShortAnswerRequest;
@@ -26,6 +27,7 @@ before(async () => {
   MAX_PROMPT_TOKENS = budget.MAX_PROMPT_TOKENS;
   PRICING_USD_PER_MILLION = budget.PRICING_USD_PER_MILLION;
   SHORT_ANSWER_MAX_INPUT_TOKENS = budget.SHORT_ANSWER_MAX_INPUT_TOKENS;
+  CLI_FIXED_COST_RESERVE_USD_BY_TIER = budget.CLI_FIXED_COST_RESERVE_USD_BY_TIER;
   disallowedToolsFor = budget.disallowedToolsFor;
   getMaxTurns = budget.getMaxTurns;
   isShortAnswerRequest = budget.isShortAnswerRequest;
@@ -112,16 +114,19 @@ test("preflight refuses when worst-case projected cost exceeds tier cap", () => 
   }
 });
 
-test("preflight ALLOWS a properly-sized short-answer request", () => {
+test("preflight refuses haiku short-answer when CLI fixed overhead would consume cap before answer", () => {
   const dec = preflightBudget(
     "what is the biggest risk? one sentence.",
-    4000, // typical pre-digested diff + scaffold
+    364, // observed 2026-04-17 deploy check: provider hit $0.0533 before answer
     "haiku",
   );
-  assert.equal(dec.allowed, true);
+  assert.equal(dec.allowed, false);
+  if (dec.allowed === false) {
+    assert.equal(dec.kind, "cost-over-cap");
+  }
 });
 
-test("INVARIANT: worst-case short-answer cost cannot exceed haiku cap", () => {
+test("INVARIANT: haiku short-answer refuses/escalates when fixed CLI overhead would consume cap", () => {
   // Algebra that proves the 2026-04-17 $0.25 regression is structurally
   // impossible with current gates.
   const maxTurns = 1;
@@ -130,12 +135,13 @@ test("INVARIANT: worst-case short-answer cost cannot exceed haiku cap", () => {
   const price = PRICING_USD_PER_MILLION.haiku;
   // Worst: every turn sends the full prompt as fresh input (no cache hit) and
   // fills max output.
+  const fixedCliReserve = CLI_FIXED_COST_RESERVE_USD_BY_TIER.haiku;
   const worstInput = maxTurns * maxPromptTokens * price.input / 1_000_000;
   const worstOutput = maxTurns * maxOutputTokensPerTurn * price.output / 1_000_000;
-  const worstTotal = worstInput + worstOutput;
+  const worstTotal = fixedCliReserve + worstInput + worstOutput;
   assert.ok(
-    worstTotal <= MAX_COST_USD_BY_TIER.haiku,
-    `worst-case short-answer cost $${worstTotal.toFixed(4)} must be <= haiku cap $${MAX_COST_USD_BY_TIER.haiku}`,
+    worstTotal > MAX_COST_USD_BY_TIER.haiku,
+    `haiku short-answer projected cost $${worstTotal.toFixed(4)} must exceed cap so it is refused/escalated before paid call`,
   );
 });
 

@@ -29,6 +29,28 @@ export const MAX_COST_USD_BY_TIER: Record<string, number> = {
   opus: 2,
 };
 
+// Claude CLI adds hidden system/tool/cache-write overhead that is not visible
+// in our final prompt token count. On 2026-04-17, a 364-token Haiku prompt
+// reached provider cost $0.0533 before producing an answer. Preflight must
+// reserve for that fixed overhead, otherwise we pay for budget-aborted runs.
+export const CLI_FIXED_COST_RESERVE_USD_BY_TIER: Record<string, number> = {
+  haiku: 0.045,
+  sonnet: 0,
+  opus: 0,
+};
+
+function pricingForTier(tier: string): { input: number; output: number; cacheWrite: number; cacheRead: number } {
+  return PRICING_USD_PER_MILLION[resolvePricingTier(tier)];
+}
+
+function capForTier(tier: string): number {
+  return MAX_COST_USD_BY_TIER[resolvePricingTier(tier)];
+}
+
+function cliReserveForTier(tier: string): number {
+  return CLI_FIXED_COST_RESERVE_USD_BY_TIER[resolvePricingTier(tier)];
+}
+
 export function isShortAnswerRequest(message: string): boolean {
   return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
 }
@@ -66,9 +88,13 @@ export function calculateAnthropicUsageCostUsd(
   usage: UsageForCost,
 ): number {
   const tier = resolvePricingTier(modelIdOrTier);
-  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
-  const cacheCreation5m = usage.cacheCreation5mInputTokens ?? usage.cacheCreationInputTokens;
-  const cacheCreation1h = usage.cacheCreation1hInputTokens ?? 0;
+  const price = PRICING_USD_PER_MILLION[tier];
+  const cacheCreation5m = typeof usage.cacheCreation5mInputTokens === "number"
+    ? usage.cacheCreation5mInputTokens
+    : usage.cacheCreationInputTokens;
+  const cacheCreation1h = typeof usage.cacheCreation1hInputTokens === "number"
+    ? usage.cacheCreation1hInputTokens
+    : 0;
   const inputCost = usage.inputTokens * price.input / 1_000_000;
   const outputCost = usage.outputTokens * price.output / 1_000_000;
   const cacheReadCost = usage.cacheReadInputTokens * price.cacheRead / 1_000_000;
@@ -113,11 +139,12 @@ export function preflightBudget(
   // Projected worst-case: max_turns × prompt × fresh-input rate, plus a 1K
   // output allowance. Per-tier hard cap must not be exceeded.
   const maxTurns = getMaxTurns(userMessage, tier);
-  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
+  const price = pricingForTier(tier);
+  const cliReserve = cliReserveForTier(tier);
   const worstInputCost = maxTurns * promptTokens * price.input / 1_000_000;
   const worstOutputCost = maxTurns * 1_000 * price.output / 1_000_000;
-  const worstTotal = worstInputCost + worstOutputCost;
-  const cap = MAX_COST_USD_BY_TIER[tier] ?? MAX_COST_USD_BY_TIER.haiku;
+  const worstTotal = cliReserve + worstInputCost + worstOutputCost;
+  const cap = capForTier(tier);
   if (worstTotal > cap) {
     return {
       allowed: false,

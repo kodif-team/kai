@@ -1,25 +1,36 @@
+import { LogLevel, parseLogLevel } from "./log";
+
 export type Config = {
+  runtimeEnv: NodeJS.ProcessEnv;
+  reposPath: string | null;
+  routerUrl: string | null;
+  compressorUrl: string | null;
+  compressorDisabled: boolean | null;
   auditDbPath: string;
-  routerUrl: string;
-  compressorUrl: string;
   compressorTimeoutMs: number;
   compressorMinQueryTokens: number;
   compressorMinPromptTokens: number;
   compressorBudgetHaiku: number;
   compressorBudgetSonnet: number;
   compressorBudgetOpus: number;
-  routerHfRepo: string;
-  routerGguf: string;
-  routerMinBytes: number;
-  compressorHfRepo: string;
-  compressorGguf: string;
-  compressorMinBytes: number;
   runnerAllowNoToken: boolean;
-  runnerToken?: string;
+  runnerToken: string | null;
   routerGitContext?: string;
+  claudeSettingsPath: string;
+  rtkHookSkipCheck: boolean;
+  tierSuggestDisabled: boolean;
+  debugCompressor: boolean;
   routerTimeoutMs: number;
-  logLevel: "debug" | "info" | "warn" | "error";
+  logLevel: LogLevel;
 };
+
+const COMPRESSOR_TIMEOUT_MS = 1_500;
+const COMPRESSOR_MIN_QUERY_TOKENS = 10;
+const COMPRESSOR_MIN_PROMPT_TOKENS = 500;
+const COMPRESSOR_BUDGET_HAIKU = 3_000;
+const COMPRESSOR_BUDGET_SONNET = 10_000;
+const COMPRESSOR_BUDGET_OPUS = 20_000;
+const ROUTER_TIMEOUT_MS = 5_000;
 
 function env(name: string): string {
   const value = process.env[name];
@@ -27,34 +38,15 @@ function env(name: string): string {
   return value.trim();
 }
 
-function envOr(name: string, fallback: string): string {
+function optEnv(name: string): string | null {
   const value = process.env[name];
-  return value && value.trim() ? value.trim() : fallback;
+  return value && value.trim() ? value.trim() : null;
 }
 
-function optEnv(name: string): string | undefined {
-  const value = process.env[name];
-  return value && value.trim() ? value.trim() : undefined;
-}
-
-function num(name: string, min: number, max: number, fallback?: number): number {
-  const raw = process.env[name];
-  if (!raw || !raw.trim()) {
-    if (fallback == null) throw new Error(`Missing required env: ${name}`);
-    if (fallback < min || fallback > max) throw new Error(`${name} default out of range: ${fallback}`);
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
-  if (value < min || value > max) throw new Error(`${name} out of range: ${value} not in [${min}, ${max}]`);
-  return value;
-}
-
-function bool(name: string, fallback?: boolean): boolean {
+function bool(name: string): boolean {
   const rawMaybe = process.env[name];
   if (!rawMaybe || !rawMaybe.trim()) {
-    if (fallback == null) throw new Error(`Missing required env: ${name}`);
-    return fallback;
+    throw new Error(`Missing required env: ${name}`);
   }
   const raw = rawMaybe.trim().toLowerCase();
   if (raw === "true") return true;
@@ -62,38 +54,42 @@ function bool(name: string, fallback?: boolean): boolean {
   throw new Error(`Invalid boolean for ${name}: ${raw}`);
 }
 
-function logLevel(name: string): "debug" | "info" | "warn" | "error" {
-  const raw = env(name).toLowerCase();
-  if (raw === "debug" || raw === "info" || raw === "warn" || raw === "error") return raw;
-  throw new Error(`Invalid log level for ${name}: ${raw}`);
+function optBool(name: string): boolean | null {
+  const rawMaybe = optEnv(name);
+  if (rawMaybe === null) return null;
+  const raw = rawMaybe.toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(`Invalid boolean for ${name}: ${raw}`);
 }
 
 export function loadConfig(): Config {
-  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN", false);
+  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN");
   const runnerToken = optEnv("RUNNER_TOKEN");
   if (!runnerAllowNoToken && !runnerToken) {
     throw new Error("RUNNER_TOKEN is required unless KAI_RUNNER_ALLOW_NO_TOKEN=true");
   }
   return {
+    runtimeEnv: process.env,
+    reposPath: optEnv("KAI_REPOS_PATH"),
+    routerUrl: optEnv("KAI_ROUTER_URL"),
+    compressorUrl: optEnv("KAI_COMPRESSOR_URL"),
+    compressorDisabled: optBool("KAI_COMPRESSOR_DISABLE"),
     auditDbPath: env("KAI_AUDIT_DB"),
-    routerUrl: envOr("KAI_ROUTER_URL", "http://kai-router:8080"),
-    compressorUrl: envOr("KAI_COMPRESSOR_URL", "http://kai-compressor:8081"),
-    compressorTimeoutMs: num("KAI_COMPRESSOR_TIMEOUT_MS", 1, 120_000, 1_500),
-    compressorMinQueryTokens: num("KAI_COMPRESSOR_MIN_QUERY_TOKENS", 0, 1_000_000, 10),
-    compressorMinPromptTokens: num("KAI_COMPRESSOR_MIN_PROMPT_TOKENS", 0, 1_000_000, 500),
-    compressorBudgetHaiku: num("KAI_COMPRESSOR_BUDGET_HAIKU", 0, 1_000_000, 3_000),
-    compressorBudgetSonnet: num("KAI_COMPRESSOR_BUDGET_SONNET", 0, 1_000_000, 10_000),
-    compressorBudgetOpus: num("KAI_COMPRESSOR_BUDGET_OPUS", 0, 1_000_000, 20_000),
-    routerHfRepo: env("KAI_ROUTER_HF_REPO"),
-    routerGguf: env("KAI_ROUTER_GGUF"),
-    routerMinBytes: num("KAI_ROUTER_MIN_BYTES", 1, 10_000_000_000),
-    compressorHfRepo: env("KAI_COMPRESSOR_HF_REPO"),
-    compressorGguf: env("KAI_COMPRESSOR_GGUF"),
-    compressorMinBytes: num("KAI_COMPRESSOR_MIN_BYTES", 1, 10_000_000_000),
+    compressorTimeoutMs: COMPRESSOR_TIMEOUT_MS,
+    compressorMinQueryTokens: COMPRESSOR_MIN_QUERY_TOKENS,
+    compressorMinPromptTokens: COMPRESSOR_MIN_PROMPT_TOKENS,
+    compressorBudgetHaiku: COMPRESSOR_BUDGET_HAIKU,
+    compressorBudgetSonnet: COMPRESSOR_BUDGET_SONNET,
+    compressorBudgetOpus: COMPRESSOR_BUDGET_OPUS,
     runnerAllowNoToken,
     runnerToken,
     routerGitContext: env("KAI_ROUTER_GIT_CONTEXT"),
-    routerTimeoutMs: num("KAI_ROUTER_TIMEOUT_MS", 1, 120_000, 5_000),
-    logLevel: logLevel("KAI_LOG_LEVEL"),
+    claudeSettingsPath: env("KAI_CLAUDE_SETTINGS_PATH"),
+    rtkHookSkipCheck: bool("KAI_RTK_HOOK_SKIP_CHECK"),
+    tierSuggestDisabled: bool("KAI_TIER_SUGGEST_DISABLE"),
+    debugCompressor: bool("KAI_DEBUG_COMPRESSOR"),
+    routerTimeoutMs: ROUTER_TIMEOUT_MS,
+    logLevel: parseLogLevel(env("KAI_LOG_LEVEL")),
   };
 }
