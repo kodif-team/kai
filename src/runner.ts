@@ -7,6 +7,7 @@ import { createLogger, errorMeta } from "./log";
 import type { RouterDecision } from "./types";
 import { parseRtkSavings } from "./rtk";
 import { sessionUpdate } from "./audit";
+import { calculateAnthropicUsageCostUsd } from "./budget";
 
 export type CLIResult = {
   text: string;
@@ -37,6 +38,10 @@ type CliJsonPayload = {
   usage?: {
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
+    cache_creation?: {
+      ephemeral_5m_input_tokens?: number;
+      ephemeral_1h_input_tokens?: number;
+    };
     input_tokens?: number;
     output_tokens?: number;
   };
@@ -61,6 +66,15 @@ function parseCliJsonPayload(output: string): CliJsonPayload {
     payload.usage = {};
     if (typeof json.usage.cache_read_input_tokens === "number") payload.usage.cache_read_input_tokens = json.usage.cache_read_input_tokens;
     if (typeof json.usage.cache_creation_input_tokens === "number") payload.usage.cache_creation_input_tokens = json.usage.cache_creation_input_tokens;
+    if (isRecord(json.usage.cache_creation)) {
+      payload.usage.cache_creation = {};
+      if (typeof json.usage.cache_creation.ephemeral_5m_input_tokens === "number") {
+        payload.usage.cache_creation.ephemeral_5m_input_tokens = json.usage.cache_creation.ephemeral_5m_input_tokens;
+      }
+      if (typeof json.usage.cache_creation.ephemeral_1h_input_tokens === "number") {
+        payload.usage.cache_creation.ephemeral_1h_input_tokens = json.usage.cache_creation.ephemeral_1h_input_tokens;
+      }
+    }
     if (typeof json.usage.input_tokens === "number") payload.usage.input_tokens = json.usage.input_tokens;
     if (typeof json.usage.output_tokens === "number") payload.usage.output_tokens = json.usage.output_tokens;
   }
@@ -294,14 +308,29 @@ async function runCLIWithHeartbeat(
         if (!resultText) resultText = output;
         const cacheRead = json.usage?.cache_read_input_tokens ?? 0;
         const cacheWrite = json.usage?.cache_creation_input_tokens ?? 0;
+        const cacheWrite5m = json.usage?.cache_creation?.ephemeral_5m_input_tokens;
+        const cacheWrite1h = json.usage?.cache_creation?.ephemeral_1h_input_tokens;
         const freshInput = json.usage?.input_tokens ?? 0;
+        const outputTokens = json.usage?.output_tokens ?? 0;
+        const providerCost = json.total_cost_usd ?? json.cost_usd;
+        const computedCost = calculateAnthropicUsageCostUsd(modelId, {
+          inputTokens: freshInput,
+          outputTokens,
+          cacheReadInputTokens: cacheRead,
+          cacheCreationInputTokens: cacheWrite,
+          cacheCreation5mInputTokens: cacheWrite5m,
+          cacheCreation1hInputTokens: cacheWrite1h,
+        });
+        if (typeof providerCost === "number" && Math.abs(providerCost - computedCost) > 0.005) {
+          core.warning(`Cost mismatch provider=${providerCost.toFixed(4)} computed=${computedCost.toFixed(4)}`);
+        }
         settled = true;
         resolve({
           text: resultText,
-          costUsd: json.total_cost_usd ?? json.cost_usd ?? 0,
+          costUsd: computedCost,
           numTurns: json.num_turns ?? 1,
           inputTokens: freshInput + cacheRead + cacheWrite,
-          outputTokens: json.usage?.output_tokens ?? 0,
+          outputTokens,
           cacheReadTokens: cacheRead,
           cacheWriteTokens: cacheWrite,
           rtkSavings,

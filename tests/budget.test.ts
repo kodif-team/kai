@@ -41,10 +41,11 @@ test("isShortAnswerRequest catches the exact phrasing that cost $0.0567", () => 
   assert.equal(isShortAnswerRequest("add tests to auth.py"), false);
 });
 
-test("getMaxTurns caps short-answer at 2 turns", () => {
-  // Invariant: max 2 turns × (tool-blocked call attempts) keeps cost bounded.
-  assert.equal(getMaxTurns("what is the biggest risk? one sentence.", "haiku"), 2);
-  assert.equal(getMaxTurns("briefly describe the diff", "haiku"), 2);
+test("getMaxTurns caps short-answer at 1 turn", () => {
+  // Invariant: short-answer tasks must complete in a single turn to avoid
+  // paying repeated fixed tool/system overhead.
+  assert.equal(getMaxTurns("what is the biggest risk? one sentence.", "haiku"), 1);
+  assert.equal(getMaxTurns("briefly describe the diff", "haiku"), 1);
   // Non-short-answer keeps its higher budget.
   assert.equal(getMaxTurns("review this PR", "haiku"), 12);
   assert.equal(getMaxTurns("fix the failing test in auth.py", "haiku"), 20);
@@ -101,7 +102,7 @@ test("preflight ALLOWS a properly-sized short-answer request", () => {
 test("INVARIANT: worst-case short-answer cost cannot exceed haiku cap", () => {
   // Algebra that proves the 2026-04-17 $0.25 regression is structurally
   // impossible with current gates.
-  const maxTurns = 2;
+  const maxTurns = 1;
   const maxPromptTokens = SHORT_ANSWER_MAX_INPUT_TOKENS;
   const maxOutputTokensPerTurn = 1000;
   const price = PRICING_USD_PER_MILLION.haiku;

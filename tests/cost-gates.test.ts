@@ -25,8 +25,8 @@ test("short-answer is detected on the phrases we've seen cost money", () => {
   assert.equal(isShortAnswerRequest("review this PR"), false);
 });
 
-test("short-answer requests are capped at 2 turns", () => {
-  assert.equal(getMaxTurns("one sentence", "haiku"), 2);
+test("short-answer requests are capped at 1 turn", () => {
+  assert.equal(getMaxTurns("one sentence", "haiku"), 1);
 });
 
 test("short-answer gating list blocks every exploration tool", () => {

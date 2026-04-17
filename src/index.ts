@@ -725,8 +725,10 @@ async function run() {
       const costCap = MAX_COST_USD_BY_TIER[modelTier] ?? MAX_COST_USD_BY_TIER.haiku;
       const costOverCap = r.costUsd > costCap;
       if (costOverCap) {
-        core.error(`Cost cap exceeded: $${r.costUsd.toFixed(4)} > $${costCap} (${modelTier})`);
-        result += `\n\n> ⚠️ **Cost cap exceeded** for ${modelTier}: $${r.costUsd.toFixed(4)} > $${costCap}. Operator alerted.`;
+        // Cost limits are enforced before the request. Once a paid call already
+        // happened, we must still deliver the best available answer instead of
+        // turning a paid result into a user-visible failure.
+        core.error(`Post-call cost over cap: $${r.costUsd.toFixed(4)} > $${costCap} (${modelTier})`);
       }
       const durationSec = Math.round(durationMs / 1000);
       footer = buildFooter(

@@ -1,14 +1,5 @@
 export type Config = {
   auditDbPath: string;
-  rateLimitSenderPerHour: number;
-  rateLimitRepoPerHour: number;
-  rateLimitSenderCostPerDay: number;
-  allowlistDefaultTier: string;
-  maxCostUsdHaiku: number;
-  maxCostUsdSonnet: number;
-  maxCostUsdOpus: number;
-  maxPromptTokens: number;
-  shortAnswerMaxInputTokens: number;
   routerUrl: string;
   routerModel: string;
   compressorUrl: string;
@@ -39,30 +30,39 @@ function env(name: string): string {
   return value.trim();
 }
 
+function envOr(name: string, fallback: string): string {
+  const value = process.env[name];
+  return value && value.trim() ? value.trim() : fallback;
+}
+
 function optEnv(name: string): string | undefined {
   const value = process.env[name];
   return value && value.trim() ? value.trim() : undefined;
 }
 
-function num(name: string, min: number, max: number): number {
-  const raw = env(name);
+function num(name: string, min: number, max: number, fallback?: number): number {
+  const raw = process.env[name];
+  if (!raw || !raw.trim()) {
+    if (fallback == null) throw new Error(`Missing required env: ${name}`);
+    if (fallback < min || fallback > max) throw new Error(`${name} default out of range: ${fallback}`);
+    return fallback;
+  }
   const value = Number(raw);
   if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
   if (value < min || value > max) throw new Error(`${name} out of range: ${value} not in [${min}, ${max}]`);
   return value;
 }
 
-function bool(name: string): boolean {
-  const raw = env(name).toLowerCase();
+function bool(name: string, fallback?: boolean): boolean {
+  const rawMaybe = process.env[name];
+  if (!rawMaybe || !rawMaybe.trim()) {
+    if (fallback == null) throw new Error(`Missing required env: ${name}`);
+    return fallback;
+  }
+  const raw = rawMaybe.trim().toLowerCase();
   if (raw === "true") return true;
   if (raw === "false") return false;
   throw new Error(`Invalid boolean for ${name}: ${raw}`);
-}
-
-function tier(name: string): string {
-  const raw = env(name).toLowerCase();
-  if (raw === "haiku" || raw === "sonnet" || raw === "opus") return raw;
-  throw new Error(`Invalid tier for ${name}: ${raw}`);
 }
 
 function logLevel(name: string): "debug" | "info" | "warn" | "error" {
@@ -72,32 +72,23 @@ function logLevel(name: string): "debug" | "info" | "warn" | "error" {
 }
 
 export function loadConfig(): Config {
-  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN");
+  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN", false);
   const runnerToken = optEnv("RUNNER_TOKEN");
   if (!runnerAllowNoToken && !runnerToken) {
     throw new Error("RUNNER_TOKEN is required unless KAI_RUNNER_ALLOW_NO_TOKEN=true");
   }
   return {
     auditDbPath: env("KAI_AUDIT_DB"),
-    rateLimitSenderPerHour: num("KAI_RATE_LIMIT_SENDER_PER_HOUR", 1, 10_000),
-    rateLimitRepoPerHour: num("KAI_RATE_LIMIT_REPO_PER_HOUR", 1, 100_000),
-    rateLimitSenderCostPerDay: num("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", 0, 1_000_000),
-    allowlistDefaultTier: tier("KAI_ALLOWLIST_DEFAULT_TIER"),
-    maxCostUsdHaiku: num("KAI_MAX_COST_USD_HAIKU", 0, 1000),
-    maxCostUsdSonnet: num("KAI_MAX_COST_USD_SONNET", 0, 1000),
-    maxCostUsdOpus: num("KAI_MAX_COST_USD_OPUS", 0, 1000),
-    maxPromptTokens: num("KAI_MAX_PROMPT_TOKENS", 1, 1_000_000),
-    shortAnswerMaxInputTokens: num("KAI_SHORT_ANSWER_MAX_INPUT_TOKENS", 1, 1_000_000),
-    routerUrl: env("KAI_ROUTER_URL"),
-    routerModel: env("KAI_ROUTER_MODEL"),
-    compressorUrl: env("KAI_COMPRESSOR_URL"),
-    compressorModel: env("KAI_COMPRESSOR_MODEL"),
-    compressorTimeoutMs: num("KAI_COMPRESSOR_TIMEOUT_MS", 1, 120_000),
-    compressorMinQueryTokens: num("KAI_COMPRESSOR_MIN_QUERY_TOKENS", 0, 1_000_000),
-    compressorMinPromptTokens: num("KAI_COMPRESSOR_MIN_PROMPT_TOKENS", 0, 1_000_000),
-    compressorBudgetHaiku: num("KAI_COMPRESSOR_BUDGET_HAIKU", 0, 1_000_000),
-    compressorBudgetSonnet: num("KAI_COMPRESSOR_BUDGET_SONNET", 0, 1_000_000),
-    compressorBudgetOpus: num("KAI_COMPRESSOR_BUDGET_OPUS", 0, 1_000_000),
+    routerUrl: envOr("KAI_ROUTER_URL", "http://kai-router:8080"),
+    routerModel: envOr("KAI_ROUTER_MODEL", "LFM2-350M"),
+    compressorUrl: envOr("KAI_COMPRESSOR_URL", "http://kai-compressor:8081"),
+    compressorModel: envOr("KAI_COMPRESSOR_MODEL", "LFM2-350M"),
+    compressorTimeoutMs: num("KAI_COMPRESSOR_TIMEOUT_MS", 1, 120_000, 1_500),
+    compressorMinQueryTokens: num("KAI_COMPRESSOR_MIN_QUERY_TOKENS", 0, 1_000_000, 10),
+    compressorMinPromptTokens: num("KAI_COMPRESSOR_MIN_PROMPT_TOKENS", 0, 1_000_000, 2_200),
+    compressorBudgetHaiku: num("KAI_COMPRESSOR_BUDGET_HAIKU", 0, 1_000_000, 3_000),
+    compressorBudgetSonnet: num("KAI_COMPRESSOR_BUDGET_SONNET", 0, 1_000_000, 10_000),
+    compressorBudgetOpus: num("KAI_COMPRESSOR_BUDGET_OPUS", 0, 1_000_000, 20_000),
     routerHfRepo: env("KAI_ROUTER_HF_REPO"),
     routerGguf: env("KAI_ROUTER_GGUF"),
     routerMinBytes: num("KAI_ROUTER_MIN_BYTES", 1, 10_000_000_000),
@@ -107,8 +98,8 @@ export function loadConfig(): Config {
     runnerAllowNoToken,
     runnerToken,
     routerGitContext: env("KAI_ROUTER_GIT_CONTEXT"),
-    fileFocusModel: env("KAI_FILE_FOCUS_MODEL"),
-    routerTimeoutMs: num("KAI_ROUTER_TIMEOUT_MS", 1, 120_000),
+    fileFocusModel: envOr("KAI_FILE_FOCUS_MODEL", "LFM2-350M"),
+    routerTimeoutMs: num("KAI_ROUTER_TIMEOUT_MS", 1, 120_000, 5_000),
     logLevel: logLevel("KAI_LOG_LEVEL"),
   };
 }

@@ -72,6 +72,11 @@ function envNumber(name: string, fallback?: number): number {
   return value;
 }
 
+const DEFAULT_RATE_LIMIT_SENDER_PER_HOUR = 20;
+const DEFAULT_RATE_LIMIT_REPO_PER_HOUR = 100;
+const DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY = 0.25;
+const DEFAULT_ALLOWLIST_TIER = "haiku";
+
 export function initAuditDb(dbPath: string): DatabaseSync {
   const db = new DatabaseSync(dbPath);
   db.exec(`
@@ -188,9 +193,9 @@ export function latestAuditId(db: DatabaseSync, sender: string, repoFull: string
 }
 
 export function checkRateLimit(db: DatabaseSync | null, sender: string, repoFull: string): RateLimitCheck {
-  const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR");
-  const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR");
-  const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY");
+  const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR", DEFAULT_RATE_LIMIT_SENDER_PER_HOUR);
+  const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR", DEFAULT_RATE_LIMIT_REPO_PER_HOUR);
+  const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY);
   if (!db) return { allowed: false, reason: "rate-limit database unavailable" };
   try {
     const hourly = db.prepare(
@@ -231,8 +236,7 @@ export function resolveAllowedModel(
   sender: string,
   requestedTier: string,
 ): { tier: string; downgraded: boolean; maxTier: string } {
-  const fallbackTier = (process.env.KAI_ALLOWLIST_DEFAULT_TIER ?? "").toLowerCase();
-  if (!fallbackTier) throw new Error("Missing required env: KAI_ALLOWLIST_DEFAULT_TIER");
+  const fallbackTier = (process.env.KAI_ALLOWLIST_DEFAULT_TIER ?? DEFAULT_ALLOWLIST_TIER).toLowerCase();
   const requested = requestedTier.toLowerCase();
   if (!db) {
     const allowed = TIER_RANK[requested] <= TIER_RANK[fallbackTier] ? requested : fallbackTier;

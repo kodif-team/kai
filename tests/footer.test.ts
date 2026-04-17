@@ -14,3 +14,8 @@ test("paid footer includes CMP savings", () => {
   assert.match(footer, /CMP 38%/i);
   assert.match(footer, /18K in \/ 1K out/);
 });
+
+test("paid footer shows <1K for small non-zero output", () => {
+  const footer = buildFooter("Haiku", "8.0%", "0%", 46959, 485, 0.1640, 3, 35, 23479);
+  assert.match(footer, /47K in \/ <1K out/);
+});

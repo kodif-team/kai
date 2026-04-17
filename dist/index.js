@@ -27642,8 +27642,8 @@ var LocalCompressorUnavailableError = class extends Error {
 function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
-function resolveCompressionBudget(tier2, overrides) {
-  const key = tier2.toLowerCase();
+function resolveCompressionBudget(tier, overrides) {
+  const key = tier.toLowerCase();
   return overrides?.[key] ?? DEFAULT_BUDGETS[key] ?? DEFAULT_BUDGETS.haiku;
 }
 function splitPromptIntoChunks(prompt) {
@@ -27910,9 +27910,14 @@ function buildDynamicPromptFromManifest(userMessage, repoFullName, route, manife
 }
 
 // src/footer.ts
+function formatK(tokens) {
+  if (tokens <= 0) return "0";
+  if (tokens < 1e3) return "<1";
+  return `${Math.round(tokens / 1e3)}`;
+}
 function buildFooter(modelLabel, rtkSavings, cmpSavings, inputTokens, outputTokens, costUsd, numTurns, durationSec, cacheReadTokens = 0) {
-  const inK = Math.round(inputTokens / 1e3);
-  const outK = Math.round(outputTokens / 1e3);
+  const inK = formatK(inputTokens);
+  const outK = formatK(outputTokens);
   const cachePct = inputTokens > 0 ? Math.round(cacheReadTokens / inputTokens * 100) : 0;
   const cacheTag = cachePct > 0 ? ` \xB7 cache ${cachePct}%` : "";
   return `Kai \xB7 ${modelLabel} \xB7 [RTK](https://github.com/rtk-ai/rtk) ${rtkSavings} \xB7 CMP ${cmpSavings}${cacheTag} \xB7 ${inK}K in / ${outK}K out \xB7 $${costUsd.toFixed(4)} \xB7 ${numTurns}t \xB7 ${durationSec}s \xB7 deeper analysis: use sonnet / use opus`;
@@ -28314,27 +28319,36 @@ function env(name) {
   if (!value || !value.trim()) throw new Error(`Missing required env: ${name}`);
   return value.trim();
 }
+function envOr(name, fallback) {
+  const value = process.env[name];
+  return value && value.trim() ? value.trim() : fallback;
+}
 function optEnv(name) {
   const value = process.env[name];
   return value && value.trim() ? value.trim() : void 0;
 }
-function num(name, min, max) {
-  const raw = env(name);
+function num(name, min, max, fallback) {
+  const raw = process.env[name];
+  if (!raw || !raw.trim()) {
+    if (fallback == null) throw new Error(`Missing required env: ${name}`);
+    if (fallback < min || fallback > max) throw new Error(`${name} default out of range: ${fallback}`);
+    return fallback;
+  }
   const value = Number(raw);
   if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
   if (value < min || value > max) throw new Error(`${name} out of range: ${value} not in [${min}, ${max}]`);
   return value;
 }
-function bool(name) {
-  const raw = env(name).toLowerCase();
+function bool(name, fallback) {
+  const rawMaybe = process.env[name];
+  if (!rawMaybe || !rawMaybe.trim()) {
+    if (fallback == null) throw new Error(`Missing required env: ${name}`);
+    return fallback;
+  }
+  const raw = rawMaybe.trim().toLowerCase();
   if (raw === "true") return true;
   if (raw === "false") return false;
   throw new Error(`Invalid boolean for ${name}: ${raw}`);
-}
-function tier(name) {
-  const raw = env(name).toLowerCase();
-  if (raw === "haiku" || raw === "sonnet" || raw === "opus") return raw;
-  throw new Error(`Invalid tier for ${name}: ${raw}`);
 }
 function logLevel(name) {
   const raw = env(name).toLowerCase();
@@ -28342,32 +28356,23 @@ function logLevel(name) {
   throw new Error(`Invalid log level for ${name}: ${raw}`);
 }
 function loadConfig() {
-  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN");
+  const runnerAllowNoToken = bool("KAI_RUNNER_ALLOW_NO_TOKEN", false);
   const runnerToken = optEnv("RUNNER_TOKEN");
   if (!runnerAllowNoToken && !runnerToken) {
     throw new Error("RUNNER_TOKEN is required unless KAI_RUNNER_ALLOW_NO_TOKEN=true");
   }
   return {
     auditDbPath: env("KAI_AUDIT_DB"),
-    rateLimitSenderPerHour: num("KAI_RATE_LIMIT_SENDER_PER_HOUR", 1, 1e4),
-    rateLimitRepoPerHour: num("KAI_RATE_LIMIT_REPO_PER_HOUR", 1, 1e5),
-    rateLimitSenderCostPerDay: num("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", 0, 1e6),
-    allowlistDefaultTier: tier("KAI_ALLOWLIST_DEFAULT_TIER"),
-    maxCostUsdHaiku: num("KAI_MAX_COST_USD_HAIKU", 0, 1e3),
-    maxCostUsdSonnet: num("KAI_MAX_COST_USD_SONNET", 0, 1e3),
-    maxCostUsdOpus: num("KAI_MAX_COST_USD_OPUS", 0, 1e3),
-    maxPromptTokens: num("KAI_MAX_PROMPT_TOKENS", 1, 1e6),
-    shortAnswerMaxInputTokens: num("KAI_SHORT_ANSWER_MAX_INPUT_TOKENS", 1, 1e6),
-    routerUrl: env("KAI_ROUTER_URL"),
-    routerModel: env("KAI_ROUTER_MODEL"),
-    compressorUrl: env("KAI_COMPRESSOR_URL"),
-    compressorModel: env("KAI_COMPRESSOR_MODEL"),
-    compressorTimeoutMs: num("KAI_COMPRESSOR_TIMEOUT_MS", 1, 12e4),
-    compressorMinQueryTokens: num("KAI_COMPRESSOR_MIN_QUERY_TOKENS", 0, 1e6),
-    compressorMinPromptTokens: num("KAI_COMPRESSOR_MIN_PROMPT_TOKENS", 0, 1e6),
-    compressorBudgetHaiku: num("KAI_COMPRESSOR_BUDGET_HAIKU", 0, 1e6),
-    compressorBudgetSonnet: num("KAI_COMPRESSOR_BUDGET_SONNET", 0, 1e6),
-    compressorBudgetOpus: num("KAI_COMPRESSOR_BUDGET_OPUS", 0, 1e6),
+    routerUrl: envOr("KAI_ROUTER_URL", "http://kai-router:8080"),
+    routerModel: envOr("KAI_ROUTER_MODEL", "LFM2-350M"),
+    compressorUrl: envOr("KAI_COMPRESSOR_URL", "http://kai-compressor:8081"),
+    compressorModel: envOr("KAI_COMPRESSOR_MODEL", "LFM2-350M"),
+    compressorTimeoutMs: num("KAI_COMPRESSOR_TIMEOUT_MS", 1, 12e4, 1500),
+    compressorMinQueryTokens: num("KAI_COMPRESSOR_MIN_QUERY_TOKENS", 0, 1e6, 10),
+    compressorMinPromptTokens: num("KAI_COMPRESSOR_MIN_PROMPT_TOKENS", 0, 1e6, 2200),
+    compressorBudgetHaiku: num("KAI_COMPRESSOR_BUDGET_HAIKU", 0, 1e6, 3e3),
+    compressorBudgetSonnet: num("KAI_COMPRESSOR_BUDGET_SONNET", 0, 1e6, 1e4),
+    compressorBudgetOpus: num("KAI_COMPRESSOR_BUDGET_OPUS", 0, 1e6, 2e4),
     routerHfRepo: env("KAI_ROUTER_HF_REPO"),
     routerGguf: env("KAI_ROUTER_GGUF"),
     routerMinBytes: num("KAI_ROUTER_MIN_BYTES", 1, 1e10),
@@ -28377,8 +28382,8 @@ function loadConfig() {
     runnerAllowNoToken,
     runnerToken,
     routerGitContext: env("KAI_ROUTER_GIT_CONTEXT"),
-    fileFocusModel: env("KAI_FILE_FOCUS_MODEL"),
-    routerTimeoutMs: num("KAI_ROUTER_TIMEOUT_MS", 1, 12e4),
+    fileFocusModel: envOr("KAI_FILE_FOCUS_MODEL", "LFM2-350M"),
+    routerTimeoutMs: num("KAI_ROUTER_TIMEOUT_MS", 1, 12e4, 5e3),
     logLevel: logLevel("KAI_LOG_LEVEL")
   };
 }
@@ -28508,6 +28513,10 @@ function envNumber(name, fallback) {
   if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
   return value;
 }
+var DEFAULT_RATE_LIMIT_SENDER_PER_HOUR = 20;
+var DEFAULT_RATE_LIMIT_REPO_PER_HOUR = 100;
+var DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY = 0.25;
+var DEFAULT_ALLOWLIST_TIER = "haiku";
 function initAuditDb(dbPath) {
   const db = new import_node_sqlite.DatabaseSync(dbPath);
   db.exec(`
@@ -28605,10 +28614,10 @@ function seedModelAllowlist(db) {
   for (const entry of raw.split(",")) {
     const [senderRaw, tierRaw] = entry.split(":").map((s) => s?.trim());
     if (!senderRaw || !tierRaw) continue;
-    const tier2 = tierRaw.toLowerCase();
-    if (tier2 !== "haiku" && tier2 !== "sonnet" && tier2 !== "opus") continue;
+    const tier = tierRaw.toLowerCase();
+    if (tier !== "haiku" && tier !== "sonnet" && tier !== "opus") continue;
     try {
-      stmt.run(senderRaw, tier2);
+      stmt.run(senderRaw, tier);
     } catch (e) {
       core.warning(`Allowlist seed failed for ${senderRaw}: ${e}`);
     }
@@ -28626,9 +28635,9 @@ function latestAuditId(db, sender, repoFull, prNumber) {
   }
 }
 function checkRateLimit(db, sender, repoFull) {
-  const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR");
-  const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR");
-  const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY");
+  const senderPerHour = envNumber("KAI_RATE_LIMIT_SENDER_PER_HOUR", DEFAULT_RATE_LIMIT_SENDER_PER_HOUR);
+  const repoPerHour = envNumber("KAI_RATE_LIMIT_REPO_PER_HOUR", DEFAULT_RATE_LIMIT_REPO_PER_HOUR);
+  const senderCostPerDay = envNumber("KAI_RATE_LIMIT_SENDER_COST_PER_DAY", DEFAULT_RATE_LIMIT_SENDER_COST_PER_DAY);
   if (!db) return { allowed: false, reason: "rate-limit database unavailable" };
   try {
     const hourly = db.prepare(
@@ -28655,17 +28664,16 @@ function checkRateLimit(db, sender, repoFull) {
     return { allowed: false, reason: "rate-limit check failed" };
   }
 }
-function recordRateLimit(db, sender, repoFull, tier2, costUsd) {
+function recordRateLimit(db, sender, repoFull, tier, costUsd) {
   if (!db) return;
   try {
-    db.prepare(`INSERT INTO rate_limits (sender, repo, tier, cost_usd) VALUES (?, ?, ?, ?)`).run(sender, repoFull, tier2, costUsd);
+    db.prepare(`INSERT INTO rate_limits (sender, repo, tier, cost_usd) VALUES (?, ?, ?, ?)`).run(sender, repoFull, tier, costUsd);
   } catch (e) {
     core.warning(`Rate-limit record failed: ${e}`);
   }
 }
 function resolveAllowedModel(db, sender, requestedTier) {
-  const fallbackTier = (process.env.KAI_ALLOWLIST_DEFAULT_TIER ?? "").toLowerCase();
-  if (!fallbackTier) throw new Error("Missing required env: KAI_ALLOWLIST_DEFAULT_TIER");
+  const fallbackTier = (process.env.KAI_ALLOWLIST_DEFAULT_TIER ?? DEFAULT_ALLOWLIST_TIER).toLowerCase();
   const requested = requestedTier.toLowerCase();
   if (!db) {
     const allowed2 = TIER_RANK[requested] <= TIER_RANK[fallbackTier] ? requested : fallbackTier;
@@ -28824,6 +28832,85 @@ function parseRtkSavings(raw) {
   return "";
 }
 
+// src/budget.ts
+var PRICING_USD_PER_MILLION = {
+  // Claude Haiku 4.5 (ballpark — tune as Anthropic publishes updates).
+  haiku: { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
+  sonnet: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
+  opus: { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 }
+};
+function requiredNumberEnv(name) {
+  const raw = process.env[name];
+  if (!raw || !raw.trim()) throw new Error(`Missing required env: ${name}`);
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
+  return value;
+}
+var MAX_COST_USD_BY_TIER = {
+  haiku: requiredNumberEnv("KAI_MAX_COST_USD_HAIKU"),
+  sonnet: requiredNumberEnv("KAI_MAX_COST_USD_SONNET"),
+  opus: requiredNumberEnv("KAI_MAX_COST_USD_OPUS")
+};
+function isShortAnswerRequest(message) {
+  return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
+}
+function getMaxTurns(message, modelTier) {
+  if (modelTier === "opus") return 25;
+  if (modelTier === "sonnet") return 20;
+  if (/fix|commit|push|apply|create|patch|refactor|document/i.test(message)) return 20;
+  if (isShortAnswerRequest(message)) return 1;
+  const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
+  return isTrulySimple ? 8 : 12;
+}
+function resolvePricingTier(modelIdOrTier) {
+  const v = modelIdOrTier.toLowerCase();
+  if (v.includes("opus")) return "opus";
+  if (v.includes("sonnet")) return "sonnet";
+  return "haiku";
+}
+function calculateAnthropicUsageCostUsd(modelIdOrTier, usage) {
+  const tier = resolvePricingTier(modelIdOrTier);
+  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
+  const cacheCreation5m = usage.cacheCreation5mInputTokens ?? usage.cacheCreationInputTokens;
+  const cacheCreation1h = usage.cacheCreation1hInputTokens ?? 0;
+  const inputCost = usage.inputTokens * price.input / 1e6;
+  const outputCost = usage.outputTokens * price.output / 1e6;
+  const cacheReadCost = usage.cacheReadInputTokens * price.cacheRead / 1e6;
+  const cacheWrite5mCost = cacheCreation5m * price.cacheWrite / 1e6;
+  const cacheWrite1hCost = cacheCreation1h * (price.input * 2) / 1e6;
+  return inputCost + outputCost + cacheReadCost + cacheWrite5mCost + cacheWrite1hCost;
+}
+function disallowedToolsFor(userMessage) {
+  if (!isShortAnswerRequest(userMessage)) return [];
+  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
+}
+var MAX_PROMPT_TOKENS = requiredNumberEnv("KAI_MAX_PROMPT_TOKENS");
+var SHORT_ANSWER_MAX_INPUT_TOKENS = requiredNumberEnv("KAI_SHORT_ANSWER_MAX_INPUT_TOKENS");
+function preflightBudget(userMessage, promptTokens, tier) {
+  if (promptTokens > MAX_PROMPT_TOKENS) {
+    return { allowed: false, reason: `prompt ${promptTokens} tokens > hard ceiling ${MAX_PROMPT_TOKENS}` };
+  }
+  if (isShortAnswerRequest(userMessage) && promptTokens > SHORT_ANSWER_MAX_INPUT_TOKENS) {
+    return {
+      allowed: false,
+      reason: `short-answer prompt ${promptTokens} tokens > cap ${SHORT_ANSWER_MAX_INPUT_TOKENS}`
+    };
+  }
+  const maxTurns = getMaxTurns(userMessage, tier);
+  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
+  const worstInputCost = maxTurns * promptTokens * price.input / 1e6;
+  const worstOutputCost = maxTurns * 1e3 * price.output / 1e6;
+  const worstTotal = worstInputCost + worstOutputCost;
+  const cap = MAX_COST_USD_BY_TIER[tier] ?? MAX_COST_USD_BY_TIER.haiku;
+  if (worstTotal > cap) {
+    return {
+      allowed: false,
+      reason: `worst-case projection $${worstTotal.toFixed(4)} > tier cap $${cap} (${maxTurns}t \xD7 ${promptTokens}tok)`
+    };
+  }
+  return { allowed: true };
+}
+
 // src/runner.ts
 function isRecord2(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -28841,6 +28928,15 @@ function parseCliJsonPayload(output) {
     payload.usage = {};
     if (typeof json.usage.cache_read_input_tokens === "number") payload.usage.cache_read_input_tokens = json.usage.cache_read_input_tokens;
     if (typeof json.usage.cache_creation_input_tokens === "number") payload.usage.cache_creation_input_tokens = json.usage.cache_creation_input_tokens;
+    if (isRecord2(json.usage.cache_creation)) {
+      payload.usage.cache_creation = {};
+      if (typeof json.usage.cache_creation.ephemeral_5m_input_tokens === "number") {
+        payload.usage.cache_creation.ephemeral_5m_input_tokens = json.usage.cache_creation.ephemeral_5m_input_tokens;
+      }
+      if (typeof json.usage.cache_creation.ephemeral_1h_input_tokens === "number") {
+        payload.usage.cache_creation.ephemeral_1h_input_tokens = json.usage.cache_creation.ephemeral_1h_input_tokens;
+      }
+    }
     if (typeof json.usage.input_tokens === "number") payload.usage.input_tokens = json.usage.input_tokens;
     if (typeof json.usage.output_tokens === "number") payload.usage.output_tokens = json.usage.output_tokens;
   }
@@ -28899,10 +28995,10 @@ function requireClaudeCLI() {
   (0, import_node_child_process.execSync)("claude --version", { stdio: "pipe", timeout: 5e3 });
 }
 function parseModelFromMessage(message) {
-  for (const tier2 of ["opus", "sonnet", "haiku"]) {
-    const pattern = new RegExp(`use\\s+${tier2}`, "i");
+  for (const tier of ["opus", "sonnet", "haiku"]) {
+    const pattern = new RegExp(`use\\s+${tier}`, "i");
     if (pattern.test(message)) {
-      return { model: tier2, cleanMessage: message.replace(pattern, "").trim() || "review this PR" };
+      return { model: tier, cleanMessage: message.replace(pattern, "").trim() || "review this PR" };
     }
   }
   return { model: "haiku", cleanMessage: message };
@@ -28985,14 +29081,29 @@ async function runCLIWithHeartbeat(apiKey, modelId, prompt, maxTurns, isRoot, hb
         if (!resultText) resultText = output;
         const cacheRead = json.usage?.cache_read_input_tokens ?? 0;
         const cacheWrite = json.usage?.cache_creation_input_tokens ?? 0;
+        const cacheWrite5m = json.usage?.cache_creation?.ephemeral_5m_input_tokens;
+        const cacheWrite1h = json.usage?.cache_creation?.ephemeral_1h_input_tokens;
         const freshInput = json.usage?.input_tokens ?? 0;
+        const outputTokens = json.usage?.output_tokens ?? 0;
+        const providerCost = json.total_cost_usd ?? json.cost_usd;
+        const computedCost = calculateAnthropicUsageCostUsd(modelId, {
+          inputTokens: freshInput,
+          outputTokens,
+          cacheReadInputTokens: cacheRead,
+          cacheCreationInputTokens: cacheWrite,
+          cacheCreation5mInputTokens: cacheWrite5m,
+          cacheCreation1hInputTokens: cacheWrite1h
+        });
+        if (typeof providerCost === "number" && Math.abs(providerCost - computedCost) > 5e-3) {
+          core2.warning(`Cost mismatch provider=${providerCost.toFixed(4)} computed=${computedCost.toFixed(4)}`);
+        }
         settled = true;
         resolve({
           text: resultText,
-          costUsd: json.total_cost_usd ?? json.cost_usd ?? 0,
+          costUsd: computedCost,
           numTurns: json.num_turns ?? 1,
           inputTokens: freshInput + cacheRead + cacheWrite,
-          outputTokens: json.usage?.output_tokens ?? 0,
+          outputTokens,
           cacheReadTokens: cacheRead,
           cacheWriteTokens: cacheWrite,
           rtkSavings
@@ -29018,67 +29129,6 @@ async function safeUpdate(o, owner, repo, id, body) {
       return;
     }
   }
-}
-
-// src/budget.ts
-var PRICING_USD_PER_MILLION = {
-  // Claude Haiku 4.5 (ballpark — tune as Anthropic publishes updates).
-  haiku: { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
-  sonnet: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
-  opus: { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 }
-};
-function requiredNumberEnv(name) {
-  const raw = process.env[name];
-  if (!raw || !raw.trim()) throw new Error(`Missing required env: ${name}`);
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`Invalid number for ${name}: ${raw}`);
-  return value;
-}
-var MAX_COST_USD_BY_TIER = {
-  haiku: requiredNumberEnv("KAI_MAX_COST_USD_HAIKU"),
-  sonnet: requiredNumberEnv("KAI_MAX_COST_USD_SONNET"),
-  opus: requiredNumberEnv("KAI_MAX_COST_USD_OPUS")
-};
-function isShortAnswerRequest(message) {
-  return /\b(one\s+(?:sentence|line|word|paragraph)|1\s+sentence|single\s+sentence|briefly|tl;?\s*dr|in\s+(?:a\s+)?(?:word|sentence|line)|short\s+answer|yes\/no|quick(?:ly)?)\b/i.test(message);
-}
-function getMaxTurns(message, modelTier) {
-  if (modelTier === "opus") return 25;
-  if (modelTier === "sonnet") return 20;
-  if (/fix|commit|push|apply|create|patch|refactor|document/i.test(message)) return 20;
-  if (isShortAnswerRequest(message)) return 2;
-  const isTrulySimple = message.length < 50 && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
-  return isTrulySimple ? 8 : 12;
-}
-function disallowedToolsFor(userMessage) {
-  if (!isShortAnswerRequest(userMessage)) return [];
-  return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
-}
-var MAX_PROMPT_TOKENS = requiredNumberEnv("KAI_MAX_PROMPT_TOKENS");
-var SHORT_ANSWER_MAX_INPUT_TOKENS = requiredNumberEnv("KAI_SHORT_ANSWER_MAX_INPUT_TOKENS");
-function preflightBudget(userMessage, promptTokens, tier2) {
-  if (promptTokens > MAX_PROMPT_TOKENS) {
-    return { allowed: false, reason: `prompt ${promptTokens} tokens > hard ceiling ${MAX_PROMPT_TOKENS}` };
-  }
-  if (isShortAnswerRequest(userMessage) && promptTokens > SHORT_ANSWER_MAX_INPUT_TOKENS) {
-    return {
-      allowed: false,
-      reason: `short-answer prompt ${promptTokens} tokens > cap ${SHORT_ANSWER_MAX_INPUT_TOKENS}`
-    };
-  }
-  const maxTurns = getMaxTurns(userMessage, tier2);
-  const price = PRICING_USD_PER_MILLION[tier2] ?? PRICING_USD_PER_MILLION.haiku;
-  const worstInputCost = maxTurns * promptTokens * price.input / 1e6;
-  const worstOutputCost = maxTurns * 1e3 * price.output / 1e6;
-  const worstTotal = worstInputCost + worstOutputCost;
-  const cap = MAX_COST_USD_BY_TIER[tier2] ?? MAX_COST_USD_BY_TIER.haiku;
-  if (worstTotal > cap) {
-    return {
-      allowed: false,
-      reason: `worst-case projection $${worstTotal.toFixed(4)} > tier cap $${cap} (${maxTurns}t \xD7 ${promptTokens}tok)`
-    };
-  }
-  return { allowed: true };
 }
 
 // src/index.ts
@@ -29786,10 +29836,7 @@ ${result}
       const costCap = MAX_COST_USD_BY_TIER2[modelTier] ?? MAX_COST_USD_BY_TIER2.haiku;
       const costOverCap = r.costUsd > costCap;
       if (costOverCap) {
-        core3.error(`Cost cap exceeded: $${r.costUsd.toFixed(4)} > $${costCap} (${modelTier})`);
-        result += `
-
-> \u26A0\uFE0F **Cost cap exceeded** for ${modelTier}: $${r.costUsd.toFixed(4)} > $${costCap}. Operator alerted.`;
+        core3.error(`Post-call cost over cap: $${r.costUsd.toFixed(4)} > $${costCap} (${modelTier})`);
       }
       const durationSec = Math.round(durationMs / 1e3);
       footer = buildFooter(

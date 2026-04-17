@@ -10,6 +10,17 @@ export const PRICING_USD_PER_MILLION: Record<string, { input: number; output: nu
   opus: { input: 15.0, output: 75.0, cacheWrite: 18.75, cacheRead: 1.50 },
 };
 
+export type PricingTier = "haiku" | "sonnet" | "opus";
+
+export type UsageForCost = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheCreation5mInputTokens?: number;
+  cacheCreation1hInputTokens?: number;
+};
+
 function requiredNumberEnv(name: string): number {
   const raw = process.env[name];
   if (!raw || !raw.trim()) throw new Error(`Missing required env: ${name}`);
@@ -33,10 +44,35 @@ export function getMaxTurns(message: string, modelTier: string): number {
   if (modelTier === "opus") return 25;
   if (modelTier === "sonnet") return 20;
   if (/fix|commit|push|apply|create|patch|refactor|document/i.test(message)) return 20;
-  if (isShortAnswerRequest(message)) return 2;
+  if (isShortAnswerRequest(message)) return 1;
   const isTrulySimple = message.length < 50
     && /^(top|list|one-liner|quick|summarize|how many|which file)/i.test(message);
   return isTrulySimple ? 8 : 12;
+}
+
+export function resolvePricingTier(modelIdOrTier: string): PricingTier {
+  const v = modelIdOrTier.toLowerCase();
+  if (v.includes("opus")) return "opus";
+  if (v.includes("sonnet")) return "sonnet";
+  return "haiku";
+}
+
+export function calculateAnthropicUsageCostUsd(
+  modelIdOrTier: string,
+  usage: UsageForCost,
+): number {
+  const tier = resolvePricingTier(modelIdOrTier);
+  const price = PRICING_USD_PER_MILLION[tier] ?? PRICING_USD_PER_MILLION.haiku;
+  const cacheCreation5m = usage.cacheCreation5mInputTokens ?? usage.cacheCreationInputTokens;
+  const cacheCreation1h = usage.cacheCreation1hInputTokens ?? 0;
+  const inputCost = usage.inputTokens * price.input / 1_000_000;
+  const outputCost = usage.outputTokens * price.output / 1_000_000;
+  const cacheReadCost = usage.cacheReadInputTokens * price.cacheRead / 1_000_000;
+  // Anthropic docs: 5m cache write = 1.25x base input (price.cacheWrite),
+  // 1h cache write = 2x base input (derive from input price).
+  const cacheWrite5mCost = cacheCreation5m * price.cacheWrite / 1_000_000;
+  const cacheWrite1hCost = cacheCreation1h * (price.input * 2) / 1_000_000;
+  return inputCost + outputCost + cacheReadCost + cacheWrite5mCost + cacheWrite1hCost;
 }
 
 // Short-answer requests ship the full PR diff inside the prompt. Block every
