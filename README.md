@@ -56,11 +56,21 @@ Kai requires a local LLM router (OpenAI-compatible, served by llama.cpp) before 
 On the EC2 self-hosted runner:
 
 ```bash
+# one-time setup — place compose file where kai can find it on action start
+sudo mkdir -p /home/kai/kai-router
+sudo cp docker-compose.router.yml /home/kai/kai-router/
+sudo chown -R kai:kai /home/kai/kai-router
+
+# pull models and start
+cd /home/kai/kai-router
 docker compose -f docker-compose.router.yml run --rm kai-router-pull
-docker compose -f docker-compose.router.yml up -d kai-router-llm
+docker compose -f docker-compose.router.yml run --rm kai-compressor-pull
+docker compose -f docker-compose.router.yml up -d kai-router-llm kai-compressor-llm
 ```
 
 Keep `router_url` pointed at `http://localhost:11434`. Default classifier is `LFM2-350M` (Q4_0 gguf, ~220 MB, ~2x faster on CPU than Qwen3 per Liquid AI benchmarks).
+
+**Self-healing:** if the containers crash between runs, Kai now probes `/health` at action start and runs `docker compose up -d kai-router-llm kai-compressor-llm` itself when it finds them down. Requires the compose file at one of: `$KAI_COMPOSE_FILE`, `/home/kai/kai-router/docker-compose.router.yml`, or `$HOME/kai-router/docker-compose.router.yml`, and the runner user in the `docker` group. Disable with `KAI_LLM_AUTOSTART=false`.
 
 ## Usage
 

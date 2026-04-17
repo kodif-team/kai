@@ -28763,6 +28763,58 @@ function requireRTKHookConfigured() {
     "RTK hook not configured in Claude settings.json \u2014 RTK would be bypassed silently. Configure PreToolUse hook with rtk, or set KAI_RTK_HOOK_SKIP_CHECK=true to override."
   );
 }
+async function probeHealth(url, timeoutMs = 1500) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${url.replace(/\/$/, "")}/health`, { signal: ctl.signal });
+    return r.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
+  if (process.env.KAI_LLM_AUTOSTART === "false") return;
+  const endpoints = [routerUrl, compressorUrl].filter((u) => !!u);
+  if (endpoints.length === 0) return;
+  const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
+  if (probes.every(Boolean)) return;
+  const composeCandidates = [
+    process.env.KAI_COMPOSE_FILE,
+    "/home/kai/kai-router/docker-compose.router.yml",
+    "/home/kai/docker-compose.router.yml",
+    `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`
+  ].filter((p) => !!p && (0, import_node_fs2.existsSync)(p));
+  if (composeCandidates.length === 0) {
+    core.warning(
+      "Local LLM is down and no docker-compose.router.yml found on the runner. Place it at /home/kai/kai-router/ or set KAI_COMPOSE_FILE."
+    );
+    return;
+  }
+  const composeFile = composeCandidates[0];
+  core.info(`Local LLM unhealthy \u2014 starting containers via ${composeFile}`);
+  try {
+    (0, import_node_child_process.execSync)(
+      `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
+      { stdio: "pipe", timeout: 6e4 }
+    );
+  } catch (e) {
+    core.warning(`docker compose up failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    return;
+  }
+  const deadline = Date.now() + 3e4;
+  while (Date.now() < deadline) {
+    const ok = await Promise.all(endpoints.map((u) => probeHealth(u)));
+    if (ok.every(Boolean)) {
+      core.info("Local LLM is healthy after auto-start");
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 2e3));
+  }
+  core.warning("Local LLM auto-start timed out \u2014 proceeding; router call will retry");
+}
 var KODIF_ARCH_CONTEXT = `
 Kodif platform: 33+ microservices. Architecture repo: kodif-team/architect
 DBs: executor-db (kodif, PostgreSQL 13), chat-db (chat, PostgreSQL 15), ml-db (zendesk-json-db-pgadmin, PostgreSQL 13). All sync to BigQuery (kodif-51ce2, public dataset).
@@ -29122,6 +29174,7 @@ async function run() {
     octokit = new Octokit2({ auth: githubToken });
     ({ owner, repo } = context2.repo);
     const auditDb = initAuditDb();
+    await ensureLocalLLMsUp(routerUrl, compressorUrl);
     const idx = commentBody.toLowerCase().indexOf(trigger.toLowerCase());
     rawMessage = commentBody.slice(idx + trigger.length).trim();
     const { model: parsedTier, cleanMessage: userMessage } = parseModelFromMessage(rawMessage);

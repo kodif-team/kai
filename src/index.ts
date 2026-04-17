@@ -407,6 +407,70 @@ function requireRTKHookConfigured(): void {
   );
 }
 
+// Probe the local LLM /health endpoint once, quickly.
+async function probeHealth(url: string, timeoutMs = 1500): Promise<boolean> {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${url.replace(/\/$/, "")}/health`, { signal: ctl.signal });
+    return r.ok;
+  } catch { return false; }
+  finally { clearTimeout(t); }
+}
+
+// Self-heal the local LLM containers when they're down at action start. Uses
+// docker compose on the runner — requires: (1) the kai user in the docker
+// group, (2) docker-compose.router.yml placed somewhere the runner can read
+// (KAI_COMPOSE_FILE or the default paths below). If the file isn't there or
+// docker fails, we log a warning and let routeEventWithLocalLLM fail-close
+// with the helpful error message.
+async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Promise<void> {
+  if (process.env.KAI_LLM_AUTOSTART === "false") return;
+  const endpoints = [routerUrl, compressorUrl].filter((u): u is string => !!u);
+  if (endpoints.length === 0) return;
+
+  const probes = await Promise.all(endpoints.map((u) => probeHealth(u)));
+  if (probes.every(Boolean)) return; // everything already up
+
+  const composeCandidates = [
+    process.env.KAI_COMPOSE_FILE,
+    "/home/kai/kai-router/docker-compose.router.yml",
+    "/home/kai/docker-compose.router.yml",
+    `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`,
+  ].filter((p): p is string => !!p && existsSync(p));
+
+  if (composeCandidates.length === 0) {
+    core.warning(
+      "Local LLM is down and no docker-compose.router.yml found on the runner. "
+      + "Place it at /home/kai/kai-router/ or set KAI_COMPOSE_FILE.",
+    );
+    return;
+  }
+  const composeFile = composeCandidates[0];
+  core.info(`Local LLM unhealthy — starting containers via ${composeFile}`);
+  try {
+    execSync(
+      `docker compose -f ${shellQuote(composeFile)} up -d kai-router-llm kai-compressor-llm`,
+      { stdio: "pipe", timeout: 60_000 },
+    );
+  } catch (e: unknown) {
+    core.warning(`docker compose up failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+    return;
+  }
+
+  // Wait up to 30s for both endpoints to come alive.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const ok = await Promise.all(endpoints.map((u) => probeHealth(u)));
+    if (ok.every(Boolean)) {
+      core.info("Local LLM is healthy after auto-start");
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  core.warning("Local LLM auto-start timed out — proceeding; router call will retry");
+}
+
 // --- Claude Code CLI execution (with RTK hooks) ---
 
 interface CLIResult {
@@ -870,6 +934,11 @@ async function run() {
 
     // Audit + Session: init DB early so allowlist lookup sees it.
     const auditDb = initAuditDb();
+
+    // Self-heal local LLM containers if they're down. Runs before any router
+    // call so we don't waste retries against a dead endpoint. Silent no-op when
+    // everything is already healthy.
+    await ensureLocalLLMsUp(routerUrl, compressorUrl);
 
     const idx = commentBody.toLowerCase().indexOf(trigger.toLowerCase());
     rawMessage = commentBody.slice(idx + trigger.length).trim();
