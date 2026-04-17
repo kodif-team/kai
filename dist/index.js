@@ -28825,42 +28825,49 @@ async function ensureLocalLLMsUp(routerUrl, compressorUrl) {
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`
   ].filter((p) => !!p && (0, import_node_fs2.existsSync)(p));
   if ((0, import_node_fs2.existsSync)("/var/run/docker.sock")) {
-    try {
-      const filters = encodeURIComponent(JSON.stringify({ name: ["kai-router", "kai-compressor"] }));
-      const raw = (0, import_node_child_process.execSync)(
-        `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&filters=${filters}'`,
-        { stdio: "pipe", timeout: 1e4, encoding: "utf-8" }
-      );
-      const containers = JSON.parse(raw);
-      if (containers.length === 0) {
-        core.warning("[diag] docker API: no kai-router/kai-compressor containers exist on this host");
-      } else {
+    const sh = (cmd, timeout = 1e4) => {
+      try {
+        const out = (0, import_node_child_process.execSync)(cmd, { stdio: ["pipe", "pipe", "pipe"], timeout, encoding: "utf-8" });
+        return { ok: true, out: out.toString() };
+      } catch (e) {
+        const err = e;
+        const merged = [err.stdout?.toString?.() ?? "", err.stderr?.toString?.() ?? "", err.message ?? ""].join("\n");
+        return { ok: false, out: merged.slice(0, 800) };
+      }
+    };
+    core.info("[diag] docker-sock probe starting");
+    core.info(`[diag] curl-version: ${sh("curl --version | head -2").out.trim()}`);
+    core.info(`[diag] sock-stat: ${sh("stat -c '%A %U:%G uid=%u gid=%g' /var/run/docker.sock").out.trim()}`);
+    core.info(`[diag] my-groups: ${sh("id -G; echo gid-names; id -Gn").out.trim()}`);
+    core.info(`[diag] can-write-sock: ${sh("[ -w /var/run/docker.sock ] && echo yes || echo no").out.trim()}`);
+    const ping = sh("curl -sS -v --unix-socket /var/run/docker.sock http://localhost/_ping 2>&1 | tail -15");
+    core.info(`[diag] /_ping (ok=${ping.ok}):
+${ping.out.trim()}`);
+    const filters = encodeURIComponent(JSON.stringify({ name: ["kai-router", "kai-compressor"] }));
+    const listCmd = `curl -sS -v --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&filters=${filters}' 2>&1`;
+    const listRes = sh(listCmd);
+    core.info(`[diag] list (ok=${listRes.ok}):
+${listRes.out.slice(-1500)}`);
+    if (listRes.ok) {
+      try {
+        const jsonStart = listRes.out.indexOf("[");
+        const body = jsonStart >= 0 ? listRes.out.slice(jsonStart) : listRes.out;
+        const containers = JSON.parse(body);
+        if (containers.length === 0) {
+          core.warning("[diag] docker API: no kai-router/kai-compressor containers");
+        }
         for (const c of containers) {
           const name = (c.Names[0] || "").replace(/^\//, "");
           core.info(`[diag] container ${name}: state=${c.State} status=${c.Status} image=${c.Image}`);
-          try {
-            const logs = (0, import_node_child_process.execSync)(
-              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/logs?stdout=1&stderr=1&tail=80&timestamps=1' 2>&1 | tr -d '\\0' | tr -c '[:print:][:space:]' '.'`,
-              { stdio: "pipe", timeout: 1e4, encoding: "utf-8" }
-            );
-            core.info(`[diag] ${name} last 80 lines:
-${logs.slice(-4e3)}`);
-          } catch (e) {
-            core.info(`[diag] ${name} logs fetch error: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
-          }
-          try {
-            const inspect = (0, import_node_child_process.execSync)(
-              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/json' 2>&1`,
-              { stdio: "pipe", timeout: 1e4, encoding: "utf-8" }
-            );
-            const parsed = JSON.parse(inspect);
-            core.info(`[diag] ${name} inspect: restartCount=${parsed.RestartCount ?? "?"} exit=${parsed.State?.ExitCode ?? "?"} oom=${parsed.State?.OOMKilled ?? "?"} health=${parsed.State?.Health?.Status ?? "?"} err=${parsed.State?.Error ?? ""}`);
-          } catch {
-          }
+          const logs = sh(
+            `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/logs?stdout=1&stderr=1&tail=80&timestamps=1' 2>&1 | tr -cd '[:print:][:space:]'`
+          );
+          core.info(`[diag] ${name} last 80 lines (ok=${logs.ok}):
+${logs.out.slice(-3e3)}`);
         }
+      } catch (e) {
+        core.info(`[diag] parse error: ${e instanceof Error ? e.message : e}`);
       }
-    } catch (e) {
-      core.warning(`[diag] docker.sock probe failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
     }
   }
   const composeFile = composeCandidates[0];

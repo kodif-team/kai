@@ -486,48 +486,54 @@ async function ensureLocalLLMsUp(routerUrl?: string, compressorUrl?: string): Pr
     `${process.env.HOME || "/home/kai"}/kai-router/docker-compose.router.yml`,
   ].filter((p): p is string => !!p && existsSync(p));
 
-  // READ-ONLY probe via /var/run/docker.sock. We have the socket but no docker
-  // CLI — that's enough to read container state + logs (Docker Engine API). We
-  // deliberately do NOT start/restart here until we see WHY the router died.
+  // READ-ONLY probes via /var/run/docker.sock. Captures stderr and runs a
+  // progressive chain: curl features → socket ping → list containers → logs.
+  // Each step's output is forwarded to the workflow log so we can see exactly
+  // where the access path breaks without SSH.
   if (existsSync("/var/run/docker.sock")) {
-    try {
-      const filters = encodeURIComponent(JSON.stringify({ name: ["kai-router", "kai-compressor"] }));
-      const raw = execSync(
-        `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&filters=${filters}'`,
-        { stdio: "pipe", timeout: 10_000, encoding: "utf-8" },
-      );
-      const containers = JSON.parse(raw) as Array<{
-        Id: string; Names: string[]; State: string; Status: string; Image: string;
-      }>;
-      if (containers.length === 0) {
-        core.warning("[diag] docker API: no kai-router/kai-compressor containers exist on this host");
-      } else {
+    const sh = (cmd: string, timeout = 10_000): { ok: boolean; out: string } => {
+      try {
+        const out = execSync(cmd, { stdio: ["pipe", "pipe", "pipe"], timeout, encoding: "utf-8" });
+        return { ok: true, out: out.toString() };
+      } catch (e: unknown) {
+        const err = e as { stdout?: Buffer | string; stderr?: Buffer | string; message?: string };
+        const merged = [err.stdout?.toString?.() ?? "", err.stderr?.toString?.() ?? "", err.message ?? ""].join("\n");
+        return { ok: false, out: merged.slice(0, 800) };
+      }
+    };
+    core.info("[diag] docker-sock probe starting");
+    core.info(`[diag] curl-version: ${sh("curl --version | head -2").out.trim()}`);
+    core.info(`[diag] sock-stat: ${sh("stat -c '%A %U:%G uid=%u gid=%g' /var/run/docker.sock").out.trim()}`);
+    core.info(`[diag] my-groups: ${sh("id -G; echo gid-names; id -Gn").out.trim()}`);
+    core.info(`[diag] can-write-sock: ${sh("[ -w /var/run/docker.sock ] && echo yes || echo no").out.trim()}`);
+    const ping = sh("curl -sS -v --unix-socket /var/run/docker.sock http://localhost/_ping 2>&1 | tail -15");
+    core.info(`[diag] /_ping (ok=${ping.ok}):\n${ping.out.trim()}`);
+
+    const filters = encodeURIComponent(JSON.stringify({ name: ["kai-router", "kai-compressor"] }));
+    const listCmd = `curl -sS -v --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&filters=${filters}' 2>&1`;
+    const listRes = sh(listCmd);
+    core.info(`[diag] list (ok=${listRes.ok}):\n${listRes.out.slice(-1500)}`);
+
+    if (listRes.ok) {
+      try {
+        // extract JSON array from combined verbose output
+        const jsonStart = listRes.out.indexOf("[");
+        const body = jsonStart >= 0 ? listRes.out.slice(jsonStart) : listRes.out;
+        const containers = JSON.parse(body) as Array<{
+          Id: string; Names: string[]; State: string; Status: string; Image: string;
+        }>;
+        if (containers.length === 0) {
+          core.warning("[diag] docker API: no kai-router/kai-compressor containers");
+        }
         for (const c of containers) {
           const name = (c.Names[0] || "").replace(/^\//, "");
           core.info(`[diag] container ${name}: state=${c.State} status=${c.Status} image=${c.Image}`);
-          try {
-            const logs = execSync(
-              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/logs?stdout=1&stderr=1&tail=80&timestamps=1' 2>&1 | tr -d '\\0' | tr -c '[:print:][:space:]' '.'`,
-              { stdio: "pipe", timeout: 10_000, encoding: "utf-8" },
-            );
-            core.info(`[diag] ${name} last 80 lines:\n${logs.slice(-4000)}`);
-          } catch (e: unknown) {
-            core.info(`[diag] ${name} logs fetch error: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
-          }
-          try {
-            const inspect = execSync(
-              `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/json' 2>&1`,
-              { stdio: "pipe", timeout: 10_000, encoding: "utf-8" },
-            );
-            const parsed = JSON.parse(inspect) as {
-              RestartCount?: number; State?: { ExitCode?: number; Error?: string; OOMKilled?: boolean; Health?: { Status?: string; FailingStreak?: number } };
-            };
-            core.info(`[diag] ${name} inspect: restartCount=${parsed.RestartCount ?? "?"} exit=${parsed.State?.ExitCode ?? "?"} oom=${parsed.State?.OOMKilled ?? "?"} health=${parsed.State?.Health?.Status ?? "?"} err=${parsed.State?.Error ?? ""}`);
-          } catch { /* best-effort */ }
+          const logs = sh(
+            `curl -sS --unix-socket /var/run/docker.sock 'http://localhost/containers/${c.Id}/logs?stdout=1&stderr=1&tail=80&timestamps=1' 2>&1 | tr -cd '[:print:][:space:]'`,
+          );
+          core.info(`[diag] ${name} last 80 lines (ok=${logs.ok}):\n${logs.out.slice(-3000)}`);
         }
-      }
-    } catch (e: unknown) {
-      core.warning(`[diag] docker.sock probe failed: ${e instanceof Error ? e.message.slice(0, 200) : e}`);
+      } catch (e) { core.info(`[diag] parse error: ${e instanceof Error ? e.message : e}`); }
     }
   }
 
