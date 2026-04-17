@@ -1506,7 +1506,7 @@ async function run() {
 
     if (octokit && owner && repo) {
       const routerHint = msg.includes("local router")
-        ? "\n\n**Likely cause:** local router (LFM2-350M on port 11434) is not reachable from the runner. On the runner, run `docker compose -f docker-compose.router.yml ps` — if containers are Exited, start with `docker compose -f docker-compose.router.yml up -d kai-router-llm kai-compressor-llm`."
+        ? "\n\n**Root cause (captured from runner):** the LLM containers are unreachable AND the runner user cannot access `/var/run/docker.sock` to restart them (owned `root:992`, runner user `kai` only in group `1001`).\n\n**Operator fix — one of:**\n1. Rebuild runner image with `usermod -aG 992 kai` (or `--group-add 992` in `docker run`).\n2. Or make the runner LLM containers restart themselves via `restart: always` in docker-compose + a host-level watchdog.\n3. Or expose a small privileged sidecar that restarts siblings; give `kai` user access to that control plane instead of the docker socket."
         : "";
       const errorBody = `> @${sender}: ${rawMessage || "(trigger)"}\n\n⚠️ **Kai error:**\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`${routerHint}\n\nCheck runner logs or contact infra team.\n\n---\n<sub>Kai (Kodif AI)</sub>`;
       try {
