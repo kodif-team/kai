@@ -28843,7 +28843,7 @@ function isImperativeWriteRequest(message) {
 }
 function getMaxTurns(message, modelTier) {
   if (isShortAnswerRequest(message)) return 1;
-  if (isReadOnlyValidationRequest(message)) return modelTier === "sonnet" ? 4 : 3;
+  if (isReadOnlyValidationRequest(message)) return 2;
   if (modelTier === "opus") return 25;
   if (modelTier === "sonnet") return 20;
   if (isImperativeWriteRequest(message)) return 20;
@@ -28870,7 +28870,7 @@ function calculateAnthropicUsageCostUsd(modelIdOrTier, usage) {
   return inputCost + outputCost + cacheReadCost + cacheWrite5mCost + cacheWrite1hCost;
 }
 function disallowedToolsFor(userMessage) {
-  if (!isShortAnswerRequest(userMessage)) return [];
+  if (!isShortAnswerRequest(userMessage) && !isReadOnlyValidationRequest(userMessage)) return [];
   return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
 }
 var MAX_PROMPT_TOKENS = 5e4;

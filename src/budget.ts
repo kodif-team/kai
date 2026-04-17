@@ -43,7 +43,7 @@ function isImperativeWriteRequest(message: string): boolean {
 
 export function getMaxTurns(message: string, modelTier: string): number {
   if (isShortAnswerRequest(message)) return 1;
-  if (isReadOnlyValidationRequest(message)) return modelTier === "sonnet" ? 4 : 3;
+  if (isReadOnlyValidationRequest(message)) return 2;
   if (modelTier === "opus") return 25;
   if (modelTier === "sonnet") return 20;
   if (isImperativeWriteRequest(message)) return 20;
@@ -79,11 +79,11 @@ export function calculateAnthropicUsageCostUsd(
   return inputCost + outputCost + cacheReadCost + cacheWrite5mCost + cacheWrite1hCost;
 }
 
-// Short-answer requests ship the full PR diff inside the prompt. Block every
-// exploration tool so Claude cannot burn turns re-exploring — it must answer
-// from the embedded diff text.
+// Short-answer and read-only validation requests ship the needed PR context
+// inside the prompt. Block exploration tools so Claude cannot burn turns
+// re-exploring or mutate files.
 export function disallowedToolsFor(userMessage: string): string[] {
-  if (!isShortAnswerRequest(userMessage)) return [];
+  if (!isShortAnswerRequest(userMessage) && !isReadOnlyValidationRequest(userMessage)) return [];
   return ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"];
 }
 

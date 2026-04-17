@@ -56,8 +56,8 @@ test("getMaxTurns does not treat 'after ... fix' as an edit command", () => {
   // Regression: validation pings like "validate after env_file fix" were
   // misclassified as edit requests (20 turns), inflating worst-case cost and
   // causing preflight refusal under haiku cap.
-  assert.equal(getMaxTurns("validate after env_file fix", "haiku"), 3);
-  assert.equal(getMaxTurns("final health check after db-permission fix", "sonnet"), 4);
+  assert.equal(getMaxTurns("validate after env_file fix", "haiku"), 2);
+  assert.equal(getMaxTurns("final health check after db-permission fix", "sonnet"), 2);
 });
 
 test("getMaxTurns keeps repo location questions cheap", () => {
@@ -73,6 +73,13 @@ test("disallowedToolsFor blocks every exploration tool on short-answer", () => {
     assert.ok(blocked.includes(t), `short-answer must block ${t}`);
   }
   assert.deepEqual(disallowedToolsFor("review this PR"), []);
+});
+
+test("disallowedToolsFor blocks exploration on read-only validation", () => {
+  const blocked = disallowedToolsFor("final health check after db-permission fix");
+  for (const t of ["Read", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"]) {
+    assert.ok(blocked.includes(t), `read-only validation must block ${t}`);
+  }
 });
 
 test("preflight refuses short-answer bigger than SHORT_ANSWER_MAX_INPUT_TOKENS", () => {
