@@ -29568,16 +29568,10 @@ ${template}
           stdio: "pipe",
           timeout: 5e3
         });
-        const auth2 = gitAuthFlag(githubToken);
-        (0, import_node_child_process2.execSync)(`git ${auth2} fetch origin ${shellQuote(pr.head.ref)} && git checkout ${shellQuote(pr.head.ref)}`, {
-          stdio: "pipe",
-          timeout: 3e4,
-          encoding: "utf-8"
-        });
         beforeHead = gitOutput("git rev-parse HEAD");
-        core3.info(`Checked out PR branch: ${pr.head.ref} at ${beforeHead.slice(0, 7)}`);
+        core3.info(`Current HEAD: ${beforeHead.slice(0, 7)}`);
       } catch (e) {
-        core3.warning(`Could not checkout PR branch: ${e instanceof Error ? e.message.slice(0, 100) : e}`);
+        core3.warning(`Could not get git HEAD: ${e instanceof Error ? e.message.slice(0, 100) : e}`);
       }
       const { data: files } = await octokit.pulls.listFiles({ owner, repo, pull_number: issueNumber, per_page: 100 });
       filesList = files.map((f) => `${f.filename} +${f.additions}/-${f.deletions}`).join("\n");
