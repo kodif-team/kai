@@ -27629,6 +27629,51 @@ function routeEvent(rawMessage, modelTier) {
       source: "rules"
     };
   }
+  if (/^stop$/i.test(normalized) || /^@?kai\s+stop$/i.test(normalized)) {
+    return {
+      intent: "stop",
+      decision: "stop",
+      confidence: 0.99,
+      modelTier,
+      estimatedTokens: 0,
+      estimatedCostUsd: 0,
+      reason: "deterministic stop command",
+      normalizedMessage: normalized,
+      maxContextTokens: 0,
+      commitExpected: false,
+      source: "rules"
+    };
+  }
+  if (isMetaQuestion(normalized)) {
+    return {
+      intent: "meta-template",
+      decision: "reply-template",
+      confidence: 0.99,
+      modelTier,
+      estimatedTokens: 0,
+      estimatedCostUsd: 0,
+      reason: "deterministic meta question",
+      normalizedMessage: normalized,
+      maxContextTokens: 0,
+      commitExpected: false,
+      source: "rules"
+    };
+  }
+  if (/\b(weather|music|joke|meme|movie|crypto price|football|soccer)\b/i.test(normalized)) {
+    return {
+      intent: "spam-abuse",
+      decision: "reply-template",
+      confidence: 0.95,
+      modelTier,
+      estimatedTokens: 0,
+      estimatedCostUsd: 0,
+      reason: "deterministic off-topic request",
+      normalizedMessage: normalized,
+      maxContextTokens: 0,
+      commitExpected: false,
+      source: "rules"
+    };
+  }
   return {
     intent: "simple-answer",
     decision: "call-model",
@@ -27702,7 +27747,7 @@ Comment: ${JSON.stringify(message)}`
 var ROUTER_GRAMMAR = 'root ::= "{\\"intent\\":\\"" intent "\\"}"\nintent ::= "simple-answer" | "review" | "write-fix" | "commit-write" | "job-candidate" | "meta-template" | "spam-abuse" | "needs-input" | "stop" | "alert" | "unsupported" | "ignore"';
 async function routeEventWithLocalLLM(rawMessage, modelTier, options) {
   const rules = routeEvent(rawMessage, modelTier);
-  if (rules.intent === "needs-input" && !rules.normalizedMessage) return rules;
+  if (rules.decision !== "call-model") return rules;
   const url = options?.url ?? process.env.KAI_ROUTER_URL;
   if (!url) {
     if (options?.allowRulesOnly) return rules;

@@ -51,6 +51,33 @@ export function routeEvent(rawMessage: string, modelTier: string): RouterDecisio
     };
   }
 
+  if (/^stop$/i.test(normalized) || /^@?kai\s+stop$/i.test(normalized)) {
+    return {
+      intent: "stop", decision: "stop", confidence: 0.99,
+      modelTier, estimatedTokens: 0, estimatedCostUsd: 0,
+      reason: "deterministic stop command", normalizedMessage: normalized,
+      maxContextTokens: 0, commitExpected: false, source: "rules",
+    };
+  }
+
+  if (isMetaQuestion(normalized)) {
+    return {
+      intent: "meta-template", decision: "reply-template", confidence: 0.99,
+      modelTier, estimatedTokens: 0, estimatedCostUsd: 0,
+      reason: "deterministic meta question", normalizedMessage: normalized,
+      maxContextTokens: 0, commitExpected: false, source: "rules",
+    };
+  }
+
+  if (/\b(weather|music|joke|meme|movie|crypto price|football|soccer)\b/i.test(normalized)) {
+    return {
+      intent: "spam-abuse", decision: "reply-template", confidence: 0.95,
+      modelTier, estimatedTokens: 0, estimatedCostUsd: 0,
+      reason: "deterministic off-topic request", normalizedMessage: normalized,
+      maxContextTokens: 0, commitExpected: false, source: "rules",
+    };
+  }
+
   return {
     intent: "simple-answer", decision: "call-model", confidence: 0.5,
     modelTier, estimatedTokens: estimateTokensFromChars(normalized),
@@ -123,8 +150,8 @@ export async function routeEventWithLocalLLM(
 ): Promise<RouterDecision> {
   const rules = routeEvent(rawMessage, modelTier);
 
-  // Empty messages skip the LLM — nothing to classify.
-  if (rules.intent === "needs-input" && !rules.normalizedMessage) return rules;
+  // Deterministic rule-only paths skip the LLM entirely.
+  if (rules.decision !== "call-model") return rules;
 
   const url = options?.url ?? process.env.KAI_ROUTER_URL;
   if (!url) {

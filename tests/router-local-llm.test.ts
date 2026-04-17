@@ -52,6 +52,18 @@ test("meta-template intent → reply-template derived in code", async () => {
   }
 });
 
+test("meta question is handled deterministically even if LLM misclassifies", async () => {
+  const llm = await startFakeLLM(JSON.stringify({ intent: "simple-answer" }));
+  try {
+    const route = await routeEventWithLocalLLM("who are you", "haiku", { url: llm.url });
+    assert.equal(route.intent, "meta-template");
+    assert.equal(route.decision, "reply-template");
+    assert.equal(route.source, "rules");
+  } finally {
+    await llm.close();
+  }
+});
+
 test("fails closed when local LLM is unavailable", async () => {
   await assert.rejects(
     routeEventWithLocalLLM("add README docs", "haiku", { url: "http://127.0.0.1:9", timeoutMs: 100 }),
