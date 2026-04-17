@@ -145,8 +145,11 @@ function parseCompressorPayload(raw: string, maxChunkId: number): CompressorPayl
     })
     .filter((id): id is number => id !== null && id >= 1 && id <= maxChunkId);
 
-  if (keepIds.length === 0) {
-    throw new LocalCompressorUnavailableError("local compressor returned empty keep_ids");
+  // keep_ids=[] is a legitimate "drop all non-pinned" verdict from the model —
+  // let mergeCompressedChunks keep only pinned chunks + any summaries. We only
+  // bail out if there are ALSO no summaries, which means the payload is empty.
+  if (keepIds.length === 0 && !(Array.isArray(shaped.summaries) && shaped.summaries.length)) {
+    throw new LocalCompressorUnavailableError("local compressor returned empty payload");
   }
 
   const summaries = Array.isArray(shaped.summaries)

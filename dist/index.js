@@ -27674,8 +27674,8 @@ function parseCompressorPayload(raw, maxChunkId) {
     }
     return null;
   }).filter((id) => id !== null && id >= 1 && id <= maxChunkId);
-  if (keepIds.length === 0) {
-    throw new LocalCompressorUnavailableError("local compressor returned empty keep_ids");
+  if (keepIds.length === 0 && !(Array.isArray(shaped.summaries) && shaped.summaries.length)) {
+    throw new LocalCompressorUnavailableError("local compressor returned empty payload");
   }
   const summaries = Array.isArray(shaped.summaries) ? shaped.summaries.filter((s) => !!s && Number.isInteger(s.id) && s.id >= 1 && s.id <= maxChunkId && typeof s.text === "string" && s.text.trim().length > 0) : [];
   return { keep_ids: [...new Set(keepIds)], summaries };
