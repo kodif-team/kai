@@ -26,7 +26,8 @@ test("answers HTTP app entrypoint lookup from local repos without model", () => 
     assert(result);
     assert.match(result.answer, /Spring Boot/);
     assert.match(result.answer, /repos\/kodif-gateway\/src\/main\/java\/com\/example\/KodifGatewayApplication\.java/);
-    assert.match(result.answer, /line 3|line 6/);
+    assert.match(result.answer, /line 6/);
+    assert.match(result.answer, /SpringApplication\.run/);
     assert.equal(result.hit.framework, "Spring Boot");
     assert.equal(result.scannedFiles, 1);
   } finally {

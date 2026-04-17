@@ -29281,8 +29281,8 @@ function findEntrypoint(serviceDir) {
     if (stats.size > MAX_FILE_BYTES) continue;
     scannedFiles++;
     const lines = (0, import_node_fs3.readFileSync)(file, "utf8").split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
-      for (const { framework, pattern } of ENTRYPOINT_PATTERNS) {
+    for (const { framework, pattern } of ENTRYPOINT_PATTERNS) {
+      for (const [index, line] of lines.entries()) {
         if (pattern.test(line)) {
           return {
             scannedFiles,
