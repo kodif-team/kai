@@ -1,10 +1,10 @@
 # Kai — GitHub Test Plan
 
-Manual regression test plan for the `er-zhi/kai@v1` GitHub Action. Designed so a junior engineer or a small LLM can follow it step by step and produce a clear pass/fail table.
+Manual regression test plan for the `kodif-team/kai@v1` GitHub Action. Designed so a junior engineer or a small LLM can follow it step by step and produce a clear pass/fail table.
 
 ## Setup
 
-1. Open any PR in a repo that has `.github/workflows/kai.yml` using `er-zhi/kai@v1`.
+1. Open any PR in a repo that has `.github/workflows/kai.yml` using `kodif-team/kai@v1`.
 2. Make sure the self-hosted runner is online and both local LLM servers are up:
    - Router at `http://localhost:21434/health` → `{"status":"ok"}`
    - Compressor at `http://localhost:21435/health` → `{"status":"ok"}`

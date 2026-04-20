@@ -53,7 +53,7 @@ jobs:
           app-id: 3394026
           private-key: ${{ secrets.KAI_APP_PRIVATE_KEY }}
 
-      - uses: er-zhi/kai@v1
+      - uses: kodif-team/kai@v1
         with:
           github_token: ${{ steps.kai-token.outputs.token }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
