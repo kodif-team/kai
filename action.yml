@@ -11,30 +11,12 @@ inputs:
     description: 'GitHub token (use create-github-app-token for kai[bot] identity)'
     required: true
     default: ${{ github.token }}
-  anthropic_api_key:
-    description: 'Anthropic API key for Claude-powered analysis'
-    required: false
   repos_path:
     description: 'Required local source path to Kodif repositories; Kai exposes it to the model only as repos/'
     required: false
   router_url:
     description: 'Required local LLM router URL (OpenAI-compatible /v1/chat/completions) before any paid model call, for example http://localhost:11434'
     required: false
-  compressor_url:
-    description: 'Optional local context-compressor URL (OpenAI-compatible /v1/chat/completions), for example http://localhost:8081'
-    required: false
-  compressor_disable:
-    description: 'Disable local context compression layer'
-    required: false
-    default: 'false'
-  compressor_min_query_tokens:
-    description: 'Skip compression when user query token estimate is below this threshold'
-    required: false
-    default: '10'
-  compressor_min_prompt_tokens:
-    description: 'Skip compression when prompt token estimate is below this threshold'
-    required: false
-    default: '1000'
 
 runs:
   using: 'node24'
