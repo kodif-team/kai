@@ -28228,6 +28228,126 @@ function loadConfig() {
   };
 }
 
+// src/repo-policy.ts
+var DEFAULT_POLICY_PATH = ".github/kodif-ai.yml";
+function isRecord2(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function decodeBase64(content) {
+  return Buffer.from(content.replace(/\s/g, ""), "base64").toString("utf8");
+}
+function getFileContent(payload) {
+  if (!isRecord2(payload)) return null;
+  if (payload.type !== "file" || typeof payload.content !== "string") return null;
+  return decodeBase64(payload.content);
+}
+function parseBool(value) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return null;
+}
+function parseRepoConsentPolicy(source) {
+  const values = /* @__PURE__ */ new Map();
+  const sectionStack = [];
+  for (const rawLine of source.split(/\r?\n/)) {
+    const withoutComment = rawLine.replace(/\s+#.*$/, "");
+    if (!withoutComment.trim()) continue;
+    if (/^\s*-\s+/.test(withoutComment)) continue;
+    const match = withoutComment.match(/^(\s*)([A-Za-z0-9_-]+):(?:\s*(.*))?$/);
+    if (!match) {
+      throw new Error(`Unsupported policy syntax: ${rawLine.trim()}`);
+    }
+    const indent = match[1].length;
+    const key = match[2];
+    const value = (match[3] ?? "").trim();
+    while (sectionStack.length > 0 && sectionStack[sectionStack.length - 1].indent >= indent) {
+      sectionStack.pop();
+    }
+    const path = [...sectionStack.map((entry) => entry.key), key].join(".");
+    if (value === "") {
+      sectionStack.push({ indent, key });
+    } else {
+      values.set(path, value.replace(/^["']|["']$/g, ""));
+    }
+  }
+  const version = Number(values.get("version"));
+  if (version !== 1) {
+    throw new Error("version must be 1");
+  }
+  const requiredBool = (path) => {
+    const raw = values.get(path);
+    if (raw === void 0) throw new Error(`${path} is required`);
+    const parsed = parseBool(raw);
+    if (parsed === null) throw new Error(`${path} must be true or false`);
+    return parsed;
+  };
+  return {
+    version,
+    agent: {
+      enabled: requiredBool("agent.enabled")
+    },
+    permissions: {
+      code_changes: requiredBool("permissions.code_changes"),
+      pull_requests: requiredBool("permissions.pull_requests"),
+      direct_push: requiredBool("permissions.direct_push"),
+      merge: requiredBool("permissions.merge")
+    }
+  };
+}
+function evaluateCodeChangeConsent(policy) {
+  if (!policy.agent.enabled) {
+    return { allowed: false, reason: "agent.enabled is false" };
+  }
+  if (!policy.permissions.code_changes) {
+    return { allowed: false, reason: "permissions.code_changes is false" };
+  }
+  if (!policy.permissions.pull_requests) {
+    return { allowed: false, reason: "permissions.pull_requests is false" };
+  }
+  if (policy.permissions.direct_push) {
+    return { allowed: false, reason: "permissions.direct_push must remain false for v1" };
+  }
+  if (policy.permissions.merge) {
+    return { allowed: false, reason: "permissions.merge must remain false" };
+  }
+  return { allowed: true, policy };
+}
+async function checkRepoCodeChangeConsent(client, owner, repo, policyPath = DEFAULT_POLICY_PATH) {
+  let defaultBranch;
+  try {
+    const { data } = await client.repos.get({ owner, repo });
+    defaultBranch = data.default_branch || "";
+  } catch (error2) {
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    return { allowed: false, reason: `could not read repository metadata: ${message}` };
+  }
+  if (!defaultBranch) {
+    return { allowed: false, reason: "repository default branch is unavailable" };
+  }
+  let content;
+  try {
+    const { data } = await client.repos.getContent({ owner, repo, path: policyPath, ref: defaultBranch });
+    content = getFileContent(data);
+  } catch (error2) {
+    const status = isRecord2(error2) && typeof error2.status === "number" ? error2.status : 0;
+    if (status === 404) {
+      return { allowed: false, reason: `${policyPath} is missing on default branch ${defaultBranch}` };
+    }
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    return { allowed: false, reason: `could not read ${policyPath}: ${message}` };
+  }
+  if (content === null) {
+    return { allowed: false, reason: `${policyPath} is not a regular file` };
+  }
+  try {
+    return evaluateCodeChangeConsent(parseRepoConsentPolicy(content));
+  } catch (error2) {
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    return { allowed: false, reason: `${policyPath} is invalid: ${message}` };
+  }
+}
+
 // src/index.ts
 var log = null;
 var LOCAL_LLM_MODEL = "LFM2-350M";
@@ -28256,6 +28376,9 @@ function displayMessage(message, fallback) {
 function buildSimpleFooter(model, durationSec) {
   return `Kai \xB7 ${model} \xB7 ${durationSec}s \xB7 OpenHands integration: pending`;
 }
+function routeMayChangeCode(route) {
+  return route.commitExpected || route.intent === "write-fix" || route.intent === "commit-write";
+}
 async function run() {
   let octokit = null;
   let owner = "", repo = "", replyCommentId = 0;
@@ -28267,6 +28390,7 @@ async function run() {
     log = createLogger2("kai-action", cfg.logLevel);
     const trigger = inputOrConstant("trigger_phrase", DEFAULT_TRIGGER_PHRASE);
     const githubToken = requireInput("github_token");
+    const policyPath = inputOrConstant("policy_path", DEFAULT_POLICY_PATH);
     const routerUrl = inputOrConstant("router_url", cfg.routerUrl ?? "");
     const routerModel = LOCAL_LLM_MODEL;
     const { context: context2 } = github;
@@ -28520,6 +28644,59 @@ ${template}
       recordRateLimit(auditDb, sender, `${owner}/${repo}`, "local-template", 0);
       core2.info(`Template reply by local router (${routerModel})`);
       return;
+    }
+    if (routeMayChangeCode(route)) {
+      const consent = await checkRepoCodeChangeConsent(octokit, owner, repo, policyPath);
+      if (!consent.allowed) {
+        const durationSec2 = Math.round((Date.now() - startTime) / 1e3);
+        const footer2 = buildSimpleFooter(routerModel, durationSec2);
+        const { data: reply2 } = await octokit.issues.createComment({
+          owner,
+          repo,
+          issue_number: issueNumber,
+          body: `> @${sender}: ${rawMessage}
+
+\u26D4 **Blocked** \u2014 this request may change code, but this repository has not opted in for Kai/OpenHands code changes.
+
+Reason: ${consent.reason}.
+
+Add a valid \`${policyPath}\` on the repository default branch to allow bot branches and PRs. Kai will not mint write-mode OpenHands credentials for this request.
+
+---
+<sub>${footer2}</sub>`
+        });
+        auditLog(auditDb, {
+          sender,
+          repo: `${owner}/${repo}`,
+          prNumber: issueNumber,
+          model: routerModel,
+          message: rawMessage,
+          durationMs: Date.now() - startTime,
+          costUsd: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          status: "blocked-missing-repo-consent",
+          error: consent.reason,
+          ...threadContext
+        });
+        upsertSession(auditDb, {
+          runId,
+          repo: `${owner}/${repo}`,
+          prNumber: issueNumber,
+          eventName: event,
+          threadKind,
+          threadId,
+          sender,
+          commentId,
+          replyCommentId: reply2.id,
+          model: routerModel,
+          phase: "blocked",
+          status: "completed"
+        });
+        core2.warning(`Code-change request blocked by repo consent policy: ${consent.reason}`);
+        return;
+      }
+      core2.info(`Repo consent policy allows code changes: ${policyPath}`);
     }
     const durationSec = Math.round((Date.now() - startTime) / 1e3);
     const footer = buildSimpleFooter(routerModel, durationSec);

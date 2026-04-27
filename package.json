@@ -8,7 +8,7 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --outfile=dist/index.js --format=cjs",
     "build:test-modules": "node scripts/build-test-modules.mjs",
-    "test:router": "npm run build && node --experimental-strip-types --test tests/router.test.ts tests/templates.test.ts tests/router-local-llm.test.ts tests/audit.test.ts",
+    "test:router": "npm run build && npm run build:test-modules && node --experimental-strip-types --test tests/router.test.ts tests/templates.test.ts tests/router-local-llm.test.ts tests/audit.test.ts tests/repo-policy.test.ts",
     "test:router:live": "npm run build && node --experimental-strip-types --test tests/router-live-llm.test.ts",
     "typecheck": "tsc --noEmit"
   },

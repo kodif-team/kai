@@ -17,6 +17,10 @@ inputs:
   router_url:
     description: 'Required local LLM router URL (OpenAI-compatible /v1/chat/completions) before any paid model call, for example http://localhost:11434'
     required: false
+  policy_path:
+    description: 'Repo-owned consent policy path on the default branch required before Kai/OpenHands may change code'
+    required: false
+    default: '.github/kodif-ai.yml'
 
 runs:
   using: 'node24'

@@ -7,6 +7,7 @@ import { templateForRoute } from "./templates";
 import { initAuditDb, checkRateLimit, recordRateLimit, auditLog, logRouterDecision, upsertSession } from "./audit";
 import { loadConfig } from "./config";
 import { createLogger, errorMeta } from "./log";
+import { checkRepoCodeChangeConsent, DEFAULT_POLICY_PATH } from "./repo-policy";
 
 type Logger = ReturnType<typeof createLogger>;
 let log: Logger | null = null;
@@ -43,6 +44,10 @@ function buildSimpleFooter(model: string, durationSec: number): string {
   return `Kai · ${model} · ${durationSec}s · OpenHands integration: pending`;
 }
 
+function routeMayChangeCode(route: RouterDecision): boolean {
+  return route.commitExpected || route.intent === "write-fix" || route.intent === "commit-write";
+}
+
 async function run() {
   let octokit: Octokit | null = null;
   let owner = "", repo = "", replyCommentId = 0;
@@ -55,6 +60,7 @@ async function run() {
     log = createLogger("kai-action", cfg.logLevel);
     const trigger = inputOrConstant("trigger_phrase", DEFAULT_TRIGGER_PHRASE);
     const githubToken = requireInput("github_token");
+    const policyPath = inputOrConstant("policy_path", DEFAULT_POLICY_PATH);
     const routerUrl = inputOrConstant("router_url", cfg.routerUrl ?? "");
     const routerModel = LOCAL_LLM_MODEL;
 
@@ -225,6 +231,31 @@ async function run() {
       recordRateLimit(auditDb, sender, `${owner}/${repo}`, "local-template", 0);
       core.info(`Template reply by local router (${routerModel})`);
       return;
+    }
+
+    if (routeMayChangeCode(route)) {
+      const consent = await checkRepoCodeChangeConsent(octokit, owner, repo, policyPath);
+      if (!consent.allowed) {
+        const durationSec = Math.round((Date.now() - startTime) / 1000);
+        const footer = buildSimpleFooter(routerModel, durationSec);
+        const { data: reply } = await octokit.issues.createComment({
+          owner, repo, issue_number: issueNumber,
+          body: `> @${sender}: ${rawMessage}\n\n⛔ **Blocked** — this request may change code, but this repository has not opted in for Kai/OpenHands code changes.\n\nReason: ${consent.reason}.\n\nAdd a valid \`${policyPath}\` on the repository default branch to allow bot branches and PRs. Kai will not mint write-mode OpenHands credentials for this request.\n\n---\n<sub>${footer}</sub>`,
+        });
+        auditLog(auditDb, {
+          sender, repo: `${owner}/${repo}`, prNumber: issueNumber,
+          model: routerModel, message: rawMessage, durationMs: Date.now() - startTime,
+          costUsd: 0, tokensIn: 0, tokensOut: 0, status: "blocked-missing-repo-consent", error: consent.reason, ...threadContext,
+        });
+        upsertSession(auditDb, {
+          runId, repo: `${owner}/${repo}`, prNumber: issueNumber, eventName: event,
+          threadKind, threadId, sender, commentId, replyCommentId: reply.id,
+          model: routerModel, phase: "blocked", status: "completed",
+        });
+        core.warning(`Code-change request blocked by repo consent policy: ${consent.reason}`);
+        return;
+      }
+      core.info(`Repo consent policy allows code changes: ${policyPath}`);
     }
 
     // Valid request — log and acknowledge (OpenHands integration pending)
